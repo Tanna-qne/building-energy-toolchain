@@ -134,6 +134,9 @@ uv sync --extra dev
 `server.py` 沒有改:`expandobjects` 預設本來就是 `True`(舊版文件誤列為修改)。
 
 第 1、2 項的 diff 在 `handover/patches/energyplus-mcp.patch`(UTF-8,可直接 `git apply`)。
+patch 另外包含三個小修:版本號從 IDD 讀(原本寫死 26.1.0)、temp 資料夾改到 repo 內的 `temp/`、
+`get_server_status` 的 `startup_time` 改成真正的啟動時間(原本是呼叫當下的時間,看不出 server 是不是還在跑舊程式)。
+**改了 vendor 的程式後,DSH 要重新載入 MCP(或重開 DSH),舊的 server 程序不會自己更新。**
 第 3 項在 `.venv` 裡,`uv sync` 會蓋掉。重建後跑(會用括號配對找出每個 `check_call`,重跑無害):
 
 ```

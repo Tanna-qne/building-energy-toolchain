@@ -85,3 +85,24 @@ index f57459f..7ca40f5 100644
      def _setup_logging(self):
          """Configure logging based on configuration"""
          log_level = getattr(logging, self.server.log_level.upper(), logging.INFO)
+diff --git a/energyplus-mcp-server/energyplus_mcp_server/server.py b/energyplus-mcp-server/energyplus_mcp_server/server.py
+index ce3a627..672c913 100644
+--- a/energyplus-mcp-server/energyplus_mcp_server/server.py
++++ b/energyplus-mcp-server/energyplus_mcp_server/server.py
+@@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
+ 
+ # Initialize configuration and set up logging
+ config = get_config()
++STARTED_AT = datetime.now()  # get_server_status 原本回報呼叫當下的時間, 看不出 server 是不是舊程序
+ 
+ # Initialize FastMCP server.
+ #
+@@ -1084,7 +1085,7 @@ async def get_server_status() -> str:
+                 "name": config.server.name,
+                 "version": config.server.version,
+                 "status": "running",
+-                "startup_time": datetime.now().isoformat(),
++                "startup_time": STARTED_AT.isoformat(),
+                 "debug_mode": config.debug_mode
+             },
+             "system": {
