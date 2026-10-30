@@ -1,0 +1,54 @@
+diff --git a/energyplus-mcp-server/energyplus_mcp_server/config.py b/energyplus-mcp-server/energyplus_mcp_server/config.py
+index f57459f..04332a9 100644
+--- a/energyplus-mcp-server/energyplus_mcp_server/config.py
++++ b/energyplus-mcp-server/energyplus_mcp_server/config.py
+@@ -41,10 +41,12 @@ class EnergyPlusConfig:
+ @dataclass
+ class PathConfig:
+     """Path configuration"""
+-    workspace_root: str = "/workspace/energyplus-mcp-server"
++    # Windows 本機: 預設指向這個 repo 目錄, 避免 Linux 容器路徑 (\workspace) 造成權限錯誤
++    _repo_dir: str = str(Path(__file__).resolve().parent.parent)
++    workspace_root: str = _repo_dir
+     sample_files_path: str = ""
+-    temp_dir: str = "/tmp"
+-    output_dir: str = "/workspace/energyplus-mcp-server/outputs"
++    temp_dir: str = os.path.join(os.environ.get("TEMP", _repo_dir), "energyplus-mcp")
++    output_dir: str = os.path.join(_repo_dir, "outputs")
+     
+     def __post_init__(self):
+         """Set default paths after initialization"""
+@@ -175,9 +177,10 @@ class Config:
+             self.energyplus.idd_path = ep_idd_path
+             # Derive installation path from IDD path
+             self.energyplus.installation_path = os.path.dirname(ep_idd_path)
+-            # Set executable path
++            # Set executable path (Windows 需要 .exe)
++            exe_name = "energyplus.exe" if os.name == "nt" else "energyplus"
+             self.energyplus.executable_path = os.path.join(
+-                self.energyplus.installation_path, "energyplus"
++                self.energyplus.installation_path, exe_name
+             )
+             # Set weather data path
+             self.energyplus.weather_data_path = os.path.join(
+@@ -189,10 +192,18 @@ class Config:
+             )
+         else:
+             # Default paths
+-            default_installation = "/app/software/EnergyPlusV26-1-0"
++            if os.name == "nt":
++                default_installation = os.getenv(
++                    "EPLUS_HOME",
++                    r"C:/Users/kiri/AppData/Local/Programs/EnergyPlusV26-2-0/EnergyPlus-26.2.0-4bd7a1f26f-Windows-x86_64",
++                )
++            else:
++                default_installation = "/app/software/EnergyPlusV26-1-0"
+             self.energyplus.installation_path = default_installation
+             self.energyplus.idd_path = os.path.join(default_installation, "Energy+.idd")
+-            self.energyplus.executable_path = os.path.join(default_installation, "energyplus")
++            self.energyplus.executable_path = os.path.join(
++                default_installation, "energyplus.exe" if os.name == "nt" else "energyplus"
++            )
+             # Set weather data path
+             self.energyplus.weather_data_path = os.path.join(default_installation, "WeatherData")
+             # Set example files path

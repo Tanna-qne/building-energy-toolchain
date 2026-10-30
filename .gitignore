@@ -1,0 +1,26 @@
+# 另外的 repo / 上游專案
+report/
+vendor/
+
+# 環境與執行產物
+.venv/
+__pycache__/
+tools/modeler/home/
+logs/
+*/models/
+db_models/inbox/
+db_models/work/
+db_models/out/
+db_models/test/
+db-energy-case/case_study/*/
+db-energy-case/runs/
+db-energy-case/demo/
+!db-energy-case/case_study/_models/
+
+# 備份與交接包
+*.bak-*
+_bak-*/
+.backup/
+handover.zip
+handover-for-claude/
+handover/HANDOVER.old.pdf

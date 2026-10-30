@@ -1,0 +1,434 @@
+# 交接文件:建築能耗模擬工具鏈
+
+最後更新:2026-10-30(Claude 接手後修正,變更見 §15)· 原交接日 2026-10-27
+
+---
+
+## 0. 一句話總結
+
+在 Windows 上把 **EnergyPlus 26.2 + LBNL 官方 MCP server** 接進 DeepSeek Harness,
+並用它在 5–11 個範例模型上跑了三輪模擬(批量、措施掃描、成本回收期),產出一份公開的靜態網頁報告。
+
+**DesignBuilder 目前不能跑模擬**(安裝缺引擎)。替代路線是 DB 匯出 IDF,丟給 `db_import.py`
+自動升版、補電表、跑全部措施(§4.2)。
+
+---
+
+## 1. 目前狀態
+
+| 項目 | 狀態 | 備註 |
+|---|---|---|
+| EnergyPlus 26.2.0 | ✅ 可用 | 可攜版,免管理員 |
+| EnergyPlus-MCP(35 工具) | ✅ 可用 | 已用真實模型驗證 |
+| MCP 在 DSH 對話內可用 | ⚠️ **未驗證** | 設定檔解析與路徑已驗證、照 DSH 方式啟動可列出 35 工具;仍需重啟 DSH 在對話內叫一次 |
+| 批量模擬(11 模型) | ✅ 11/11 成功 | 自動補電表,見 §6.1 |
+| 措施掃描(5×4) | ✅ 20/20 成功 | 333 秒,含天然氣 |
+| 組合 + 回收期(5×5) | ✅ 25/25 成功 | 平行 4 個 MCP,150 秒 |
+| 敏感度 + 網頁報告 | ✅ 已上線 | GitHub Pages |
+| DesignBuilder 模擬 | ❌ 不可用 | 缺 EnergyPlus 引擎(§4.1) |
+| DB IDF 匯入(`db_import.py`) | ✅ 流程可用 | 用 25.1 舊版 IDF 與中文檔名實測通過;**真正 DB 匯出的檔還沒測** |
+
+---
+
+## 2. 環境
+
+| 項目 | 值 |
+|---|---|
+| OS | Windows |
+| 工作區 | `C:\Users\kiri\Documents\deepseek-harness\default-workspace` |
+| EnergyPlus | `C:\Users\kiri\AppData\Local\Programs\EnergyPlusV26-2-0\EnergyPlus-26.2.0-4bd7a1f26f-Windows-x86_64` |
+| Python(DSH runtime) | `C:\Users\kiri\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\python\python.exe` |
+| uv | `C:\Users\kiri\.local\bin\uv.exe`(0.13.0) |
+| GitHub | `gh` CLI 已登入(需要 `repo` 權限) |
+| 代理 | 不用。前任留下的本機代理已停用,2026-10-30 已移除 git 全域 `http.proxy` / `https.proxy`,直連 GitHub 可 push |
+| git 身分 | 本機沒有設全域 `user.name` / `user.email`;`report/` 的 commit 用 `-c user.name=Tanna-qne -c user.email=Tanna-qne@users.noreply.github.com` |
+
+---
+
+## 3. 系統架構(資料流)
+
+```
+IDF 模型 ──> EnergyPlus-MCP(stdio JSON-RPC)──> EnergyPlus 26.2 ──> 輸出目錄
+                  │                                                  │
+                  │ 35 個工具:load / inspect / modify / run          ├─ *.mtr  電表(能耗)
+                  │                                                  ├─ *.eio  面積、區域資訊
+                  ▼                                                  ├─ *Meter.csv
+  驅動腳本(batch_driver / scan / scan2 / db_import)                  └─ *.htm  報表
+                  │
+                  ▼
+         CSV / Markdown ──> sensitivity.py ──> report/index.html ──> GitHub Pages
+```
+
+**重點設計**:所有模型修改與模擬都呼叫 MCP 的工具,驅動腳本只做排程與匯總。
+不要另外寫一套直接呼叫 EnergyPlus 的邏輯(之前寫過,已刪,見 §7)。
+唯一例外是 IDF 版本升級:MCP 沒有這個工具,`db_import.py` 直接呼叫 E+ 自帶的 Transition 程式。
+
+---
+
+## 4. 兩個外部軟體的狀況
+
+### 4.1 DesignBuilder:裝了但不能模擬
+
+- 版本 **2025.1.1**(`C:\Program Files (x86)\DesignBuilder`)。
+- 授權正常:診斷日誌顯示 `Licence (Evaluation) for EP` 有效到 **2026-11-23**
+  (EP = EnergyPlus),授權檔在 `C:\ProgramData\DesignBuilder\Licences`。
+- **但引擎檔案缺失**:`DesignBuilder\EnergyPlus\` 只有一個 164 KB 的
+  `DesignBuilderEnergyPlus.exe`(模擬管理程式),沒有 `energyplus.exe`、沒有 `Energy+.idd`。
+  整機(Program Files / ProgramData / AppData / 登錄表 / `Lib\`)都找不到引擎。
+  程式內寫死的路徑是 `...\Lib\EnergyPlus\DesignBuilderEnergyPlus.exe`,所以引擎本來該在那。
+- **結論**:DB 的 Simulation 按鈕大概率無法用。要修只能重裝 DB 並把 EnergyPlus 一起裝上。
+
+### 4.2 替代路線(目前唯一可行的 DB 用法)
+
+DB 建模 → **匯出 IDF**(File → Export → EnergyPlus → IDF,匯出不需要引擎)→ 放進 `db_models\inbox\` →
+`python db_import.py`。結果在 `db_models/out/report.md`,中間檔在 `db_models/work/`。
+
+`db_import.py` 依序做:
+
+1. 複製到 `db_models/work/`;非 ASCII 檔名改用 ASCII 工作名(E+ 讀不到中文路徑),報告仍顯示原名。
+2. 讀 `Version`,用 `<E+>/PreProcess/IDFVersionUpdater/Transition-*.exe` 一路升到 26.2
+   (DB 2025.1 對應 E+ 23.1;9.0 以前的版本沒有升級程式,會跳過並說明)。
+3. MCP `modify_simulation_control`:關掉 sizing period 模擬(否則電表 CSV 多出設計日的列,加總會灌水)。
+4. MCP `add_output_meters`:補 `Electricity:Facility`、`NaturalGas:Facility`(RunPeriod)。
+5. 交給 `scan2.scan_parallel()` 跑基準 + 全部措施。
+
+DB 自帶 20 多個範例模型在 `C:\ProgramData\DesignBuilder\Templates\*.dsb`,不用自己建模就能測。
+**還沒用真正 DB 匯出的檔測過**,若遇到 DB 特有物件報錯,看 `logs/mcp-*.log` 與輸出目錄的 `.err`。
+
+---
+
+## 5. 安裝與設定(可重建)
+
+### 5.1 EnergyPlus
+
+下載 GitHub release `v26.2.0` 的 `EnergyPlus-26.2.0-4bd7a1f26f-Windows-x86_64.zip`,
+解壓到 `C:\Users\kiri\AppData\Local\Programs\EnergyPlusV26-2-0\`。
+驗證:`energyplus.exe --version` → `EnergyPlus, Version 26.2.0-4bd7a1f26f`。
+
+注意:它自帶的 `WeatherData` 只有 5 個美國城市(Chicago / Tampa / San Francisco / Golden / Sterling)。
+要別的城市,去 climate.onebuilding.org 下載 EPW 放進 `WeatherData`。
+
+### 5.2 EnergyPlus-MCP
+
+```
+git clone --depth 1 https://github.com/LBNL-ETA/EnergyPlus-MCP.git vendor/EnergyPlus-MCP
+cd vendor/EnergyPlus-MCP/energyplus-mcp-server
+uv sync --extra dev
+```
+
+然後套用 Windows 修正(共 3 處,詳見 `vendor/EnergyPlus-MCP/LOCAL-SETUP.md`):
+
+| # | 位置 | 修正 | 原因 |
+|---|---|---|---|
+| 1 | `config.py` `PathConfig` | `/workspace`、`/tmp` → repo 目錄與 `%TEMP%` | 否則輸出到 `\workspace` 得 `WinError 5` |
+| 2 | `config.py` 執行檔 | Windows 補 `.exe` | 否則找不到 `energyplus.exe` |
+| 3 | `eppy/runner/run_functions.py` | 4 個 `check_call(...)` 都加 `stdin=subprocess.DEVNULL` | **關鍵**:子程序繼承 MCP 的 stdin,遇 ExpandObjects 會永久卡死 |
+
+`server.py` 沒有改:`expandobjects` 預設本來就是 `True`(舊版文件誤列為修改)。
+
+第 1、2 項的 diff 在 `handover/patches/energyplus-mcp.patch`(UTF-8,可直接 `git apply`)。
+第 3 項在 `.venv` 裡,`uv sync` 會蓋掉。重建後跑(會用括號配對找出每個 `check_call`,重跑無害):
+
+```
+cd vendor/EnergyPlus-MCP/energyplus-mcp-server
+.venv/Scripts/python.exe apply_windows_patches.py
+```
+
+另外把 `<E+>/DataSets/Window5DataFile.dat` 複製到
+`vendor/EnergyPlus-MCP/energyplus-mcp-server/datasets/`(部分模型用相對路徑引用)。
+
+### 5.3 接進 DeepSeek Harness
+
+設定檔:`C:\Users\kiri\.dsh\profiles\desktop\cordis.patch.yml`(**不要改 `cordis.yml` 本體**)。
+
+```yaml
+- id: mcp-energyplus
+  name: "@deepseek-ai/dsh-mcp-client"
+  config:
+    serverName: energyplus
+    transport: stdio
+    command: "C:/Users/kiri/Documents/deepseek-harness/default-workspace/vendor/EnergyPlus-MCP/energyplus-mcp-server/.venv/Scripts/python.exe"
+    args: [ "-m", "energyplus_mcp_server.server" ]
+    cwd: "C:/Users/kiri/Documents/deepseek-harness/default-workspace/vendor/EnergyPlus-MCP/energyplus-mcp-server"
+    env:
+      EPLUS_IDD_PATH: "C:/Users/kiri/AppData/Local/Programs/EnergyPlusV26-2-0/EnergyPlus-26.2.0-4bd7a1f26f-Windows-x86_64/Energy+.idd"
+```
+
+重啟 DSH 後工具會以 `mcp__energyplus__` 前綴出現。
+
+---
+
+## 6. 已驗證的結果
+
+### 6.1 批量模擬(`batch/`,11 模型 / 156 秒 / 11 成功)
+
+5ZoneAirCooled 43,510 kWh、5ZoneAirCooledConvCoef 43,822、
+5ZoneAirCooledDemandLimiting 39,108、HVACTemplate-5ZoneVAVFanPowered 55,255、
+HVACTemplate-5ZoneBaseboardHeat 35,865、1ZoneDataCenterCRAC 879,408 等。
+原本有 3 個模型(`1ZoneEvapCooler_4Win…`、`1ZoneUncontrolled`、`…FixedRateVentilation`)沒輸出電表,
+成功卻讀不到用電;現在先用 MCP `add_output_meters` 補上(副本在 `batch/models/`),11 個都有數字。
+**排除**:`5ZoneAirCooledWithSlab`(GroundHeatTransfer 展開後仍缺 `OtherSideCoefficients`,模型特例)。
+
+**2026-10-30 起,所有「省多少」都以總能源(電 + 天然氣)計。** 舊版只看電:範例模型用燃氣鍋爐暖房,
+照明與貼膜會讓暖房多燒天然氣,只看電會高估效益;滲風省的是天然氣,只看電會以為沒效果。
+
+### 6.2 措施掃描(`scan/`,5 模型 × 4 情境 / 333 秒)
+
+總能源相對基準(括號內是只看用電):
+
+| 模型 | 貼膜 SHGC 0.30 | 照明 −30% | 滲風 ×0.5 |
+|---|---|---|---|
+| 5ZoneAirCooled | −0.2%(−2.9%) | −10.0%(−16.9%) | −1.5%(+0.0%) |
+| 5ZoneAirCooledConvCoef | −0.0%(−2.0%) | −10.4%(−16.6%) | −0.5%(−0.0%) |
+| 5ZoneAirCooledDemandLimiting | −3.1%(−1.0%) | −2.8%(−2.2%) | −0.5%(−0.0%) |
+| HVACTemplate-5ZoneVAVFanPowered | −2.0%(−5.0%) | −10.5%(−14.5%) | −0.2%(−0.2%) |
+| HVACTemplate-5ZoneBaseboardHeat | +0.1%(−0.3%) | −18.9%(−19.8%) | −0.3%(+0.0%) |
+
+DemandLimiting 照明省得少不是 bug:照明確實改到了(16 → 11.2 W/m²),是模型的需量控制白天本來就會壓低照明。
+
+### 6.3 組合與回收期(`scan2/`,25 次模擬 / 平行 150 秒)
+
+成本假設(集中在 `scan2.py` 的 `COSTS`,`sensitivity.py` 也讀這裡):電價 4.5 TWD/kWh、
+天然氣 1.5 TWD/kWh、貼膜 1,200 TWD/m² 玻璃、照明 600 TWD/m² 樓地板。
+面積從 `.eio` 自動取;樓地板只算有照明的 Zone(5 區模型 463.6 m²,舊版誤把 plenum 算進去成 927.2 m²)。
+
+| 模型 | 照明 | 貼膜 | 組合 | 組合回收期 | 滲風 |
+|---|---|---|---|---|---|
+| 5ZoneAirCooled | −10.0% | −0.2% | −11.4% | 9.6 年 | −1.5% |
+| 5ZoneAirCooledConvCoef | −10.4% | −0.0% | −10.4% | 10.3 年 | −0.5% |
+| 5ZoneAirCooledDemandLimiting | −2.8% | −3.1% | −5.9% | 43.2 年 | −0.5% |
+| HVACTemplate-5ZoneVAVFanPowered | −10.5% | −2.0% | −12.2% | 7.8 年 | −0.2% |
+| HVACTemplate-5ZoneBaseboardHeat | −18.9% | +0.1% | −18.8% | 11.0 年 | −0.3% |
+
+### 6.4 敏感度與網頁(`report/`)
+
+電價 2 / 3 / 4.5 / 6 / 8 / 10 / 12 TWD/kWh × 成本倍數 0.5 / 0.75 / 1 / 1.5 / 2(天然氣價固定)。
+因為有天然氣項,回收期對電價不再是純雙曲線:電價翻倍時,回收期砍得比一半更多。
+最快:VAV 機型貼膜,4.5 TWD 時 7.0 年;最慢:Baseboard 貼膜 259 年。滲風沒有成本假設,不列入。
+
+### 6.5 氣候對照(`db-energy-case/case_study`,5ZoneAirCooled,463.6 m²)
+
+EUI 以電 + 天然氣計。舊版標成「miami」的兩組實際用的是 Tampa 氣象檔,已改名。
+
+| 情境 | EUI kWh/m² | 用電 kWh | 天然氣 kWh |
+|---|---|---|---|
+| Chicago 基準 | 134.9 | 43,510 | 19,018 |
+| Tampa | 122.0 | 51,585 | 4,967 |
+| Chicago + 保溫 ×3 | 127.0 | 42,696 | 16,168 |
+| Chicago + 冷氣設定 24→25.5°C | 125.4 | 41,105 | 17,017 |
+
+舊版只看電,結論是 Tampa 比 Chicago 耗能;算進天然氣後反過來,Tampa 的 EUI 較低。
+
+### 6.6 GitHub Pages
+
+Repo https://github.com/Tanna-qne/building-energy-sensitivity(public)
+站點 https://tanna-qne.github.io/building-energy-sensitivity/
+另有帳號自訂網域 http://hedonotlikeme.com/building-energy-sensitivity/(github.io 會 301 轉址過去)
+Pages 狀態 `built`,已實測回 200。
+
+---
+
+## 7. 程式碼清單
+
+| 檔案 | 用途 |
+|---|---|
+| `batch_driver.py` | MCP 的最小 stdio 客戶端(`Mcp` 類)+`meter_kwh()` 電表解析;被其他腳本 import。server 的 stderr 寫到 `logs/mcp-N.log`,server 掛掉會立刻報錯 |
+| `scan/scan.py` | 措施掃描(照明/貼膜/滲風),含 `lighting_scaled_updates()`;功能已被 `scan2` 涵蓋 |
+| `scan2/scan2.py` | 全部措施 + 組合 + 成本/回收期;`scan_parallel()` 平行跑、`areas()` 從 `.eio` 取面積、`apply()` 檢查修改工具是否成功 |
+| `db_import.py` | DB 匯出的 IDF → 升版 → 補電表 → `scan_parallel()`(§4.2) |
+| `tools/modeler/build_idf.py` | 參數 JSON(尺寸 / 樓層 / 窗牆比 / 用途 / 空調)→ Ladybug Tools + OpenStudio 建模 → IDF → `db_import.py`。用自己的 venv(`tools/modeler/.venv`),用法見根目錄 `README.md` |
+| `sensitivity.py` | 電價/成本敏感度 → 產生 `report/index.html` 與 `sensitivity.csv` |
+| `db-energy-case/dbcase.py` | 早期的獨立分析工具:讀 `eplusout.csv`/`eplusmtr.csv` 算 EUI 與分項(不經 MCP);已被 `db_import.py` 取代 |
+| `vendor/EnergyPlus-MCP/apply_windows_patches.py` | 重套 eppy 的 stdin 修正(放在 `energyplus-mcp-server/` 下跑) |
+| `report/index.html` | 可托管的單檔報告(內嵌 SVG) |
+
+所有腳本的路徑都以腳本所在位置為基準,從哪個目錄執行都可以。
+
+**已刪除**:`bldg-tool/`(自己手寫的參數化建模 + MCP)。原因:使用者要求優先整合現成專案,
+不要自己重造;官方 MCP 已涵蓋載入/修改/模擬。
+
+---
+
+## 8. 踩過的坑(接手時務必知道)
+
+1. **eppy 子程序繼承 stdin** → 遇 ExpandObjects 永久卡死。修法見 §5.2 第 3 項。
+2. **MCP 的欄位命名是 eppy 風格**(例:`Lighting_Level`、`Watts_per_Floor_Area`),
+   不是 epJSON 的 snake_case。用錯會回 `Invalid field name`。
+3. **修改工具會在來源檔旁邊寫新檔**(<`name`>_modified.idf)。若來源在唯讀目錄
+   (例如 EnergyPlus 安裝目錄的 ExampleFiles)會 `WinError 13`。要先把模型複製到可寫目錄。
+4. **Window5 模型**需要 `<cwd>/datasets/Window5DataFile.dat`,否則 Fatal。
+5. **GroundHeatTransfer 模型**必須 `expandobjects=True`;但即使展開,
+   `5ZoneAirCooledWithSlab` 仍缺 `OtherSideCoefficients`,屬模型問題。
+6. **Windows 主控台是 GBK**:Python 印中文/²/emoji 會 `UnicodeEncodeError`。腳本開頭要
+   `sys.stdout.reconfigure(encoding="utf-8", errors="replace")`,PowerShell 端設 `[Console]::OutputEncoding`。
+7. **`uv sync` 會蓋掉 eppy patch**,要重跑 `apply_windows_patches.py`。
+8. **DSH 的 MCP 工具要重啟 app 才出現**。
+9. **`edit` 工具要求先 `read` 過該檔**;檔案被外部改過會要求重讀。
+10. **E+ 讀不到非 ASCII 路徑**:中文檔名會 `File not found`,而且 E+ 回傳的亂碼讓 MCP 送不出回應,
+    client 會卡到逾時。`db_import.py` 已自動改用 ASCII 工作檔名;工作區路徑本身也要是 ASCII。
+11. **傳給 MCP 的路徑要用絕對路徑**:server 的 cwd 是 `energyplus-mcp-server/`,相對路徑會找不到。
+12. **plenum 在 `.eio` 裡也標成建築面積的一部分**(E+ 的 Net Conditioned Building Area 也含它),
+    算照明投資或 EUI 時要排除,`scan2.areas()` 只算有 Lights 的 Zone。
+13. **範例模型用燃氣鍋爐暖房**,只看 `Electricity:Facility` 會算錯省能;一律加上 `NaturalGas:Facility`。
+14. **平行跑時每個 MCP server 是獨立程序**,同一模型的措施仍要依序(組合要用照明的成果)。
+15. **26.2 的 ExpandObjects 用舊欄位定義**,遇到新版物件(如 40 欄的 `Chiller:Electric:EIR`)會 SEVERE 失敗,
+    MCP 只回空白錯誤(看輸出目錄的 `.experr`)。`batch_driver.sim_args()` 只在有 HVACTemplate / GroundHeatTransfer 時才展開。
+16. **dragonfly 的 `set_all_room_2d_hvac` 預設 `conditioned_only=True`**,新建的 zone 會全被跳過、模型沒有空調
+    (症狀:天然氣 0、只有照明措施有效果)。`build_idf.py` 已傳 `conditioned_only=False`。
+17. **Ladybug Tools 會在 `HOME` / `APPDATA` 建資料夾**,sandbox 下會 `WinError 5`;`build_idf.py` 把兩者指到 `tools/modeler/home/`。
+
+---
+
+## 9. 待辦(依優先序)
+
+1. **用真正 DB 匯出的 IDF 跑 `db_import.py`**:從 DB 範例(`C:\ProgramData\DesignBuilder\Templates\`)
+   匯出一個丟進 `db_models\inbox\`。需要人在 DB 介面操作。
+2. **重啟 DSH 驗證 MCP**:設定與 server 已驗證,但從未在對話內實際叫過 `mcp__energyplus__*`。
+3. **修 DB 模擬**(可選):重裝 DB 時把 EnergyPlus 一起裝,或繼續用外部 E+ 取代。
+4. **真實空調系統**:目前掃描用的是範例模型自帶系統;若要算電費與碳排,
+   應換成 PTAC/VAV 等真實系統並加電價、碳排係數。
+5. **版本對齊**(低優先):MCP 上游預設 E+ 26.1,本機是 26.2,目前沒問題但屬未驗證區。
+6. **報告自動化**:目前 `sensitivity.py` 手動跑,可考慮 CI(GitHub Actions)自動重建 Pages。
+7. **`db_import.py` 加 `--weather`**:目前氣象檔寫死 Chicago(`batch_driver.WEATHER`)。
+8. **清理**:`scan/scan.py`、`db-energy-case/dbcase.py` 已被取代,確認後可刪。
+
+---
+
+## 10. 給接手者的規矩
+
+- 工作區有 `AGENTS.md`:回覆用繁體中文、先結論後理由、簡短、不要免責聲明。
+- **不要改** `~/.dsh/profiles/desktop/cordis.yml`,只改 `cordis.patch.yml`。
+- **不要**自行重寫模擬邏輯,優先用 MCP 既有工具;要新增能力先找現成開源專案。
+- 動到網路設定(代理/DNS)前先確認,會影響使用者的日常連線。
+- 發布到使用者的 GitHub 前要明確確認(公開可見)。
+
+---
+
+## 11. 檔案索引(絕對路徑)
+
+```
+C:\Users\kiri\Documents\deepseek-harness\default-workspace\
+├─ batch_driver.py
+├─ sensitivity.py
+├─ db_import.py
+├─ scan\scan.py
+├─ scan2\scan2.py
+├─ db-energy-case\dbcase.py
+├─ db-energy-case\case_study\results.md
+├─ db_models\inbox\                  (DB 匯出的 IDF 放這裡)
+├─ db_models\work\ · out\            (db_import 的中間檔與結果)
+├─ logs\mcp-N.log                    (各 MCP server 的 stderr)
+├─ batch\report.md · results.csv · models\
+├─ scan\report.md · results.csv
+├─ scan2\report.md · results.csv
+├─ report\index.html · sensitivity.csv · results.csv   (GitHub Pages repo)
+└─ vendor\EnergyPlus-MCP\            (upstream clone,改 config.py + .venv 裡的 eppy)
+   ├─ LOCAL-SETUP.md
+   ├─ apply_windows_patches.py
+   └─ energyplus-mcp-server\
+      ├─ apply_windows_patches.py
+      ├─ datasets\Window5DataFile.dat
+      └─ sample_files\ (5ZoneAirCooled.idf、HVACTemplate-5ZoneVAVFanPowered.idf、batch\ 11 個模型)
+```
+---
+
+## 12. 附錄 A:MCP 的 35 個工具
+
+```
+copy_file, load_idf_model, get_model_summary, check_simulation_settings,
+inspect_schedules, inspect_people, modify_people, inspect_lights, modify_lights,
+inspect_electric_equipment, modify_electric_equipment, modify_simulation_control,
+modify_run_period, change_infiltration_by_mult, add_window_film_outside,
+add_coating_outside, list_zones, get_surfaces, get_materials, validate_idf,
+get_output_variables, get_output_meters, add_output_variables, add_output_meters,
+list_available_files, get_server_configuration, get_server_status,
+discover_hvac_loops, get_loop_topology, visualize_loop_diagram,
+run_energyplus_simulation, create_interactive_plot, get_server_logs,
+get_error_logs, clear_logs
+```
+
+實務上最常用:`load_idf_model`、`inspect_lights`、`modify_lights`、
+`change_infiltration_by_mult`、`add_window_film_outside`、`run_energyplus_simulation`。
+
+參數形狀(節錄):
+
+```json
+{"idf_path": "...", "weather_file": "...", "annual": true,
+ "readvars": true, "expandobjects": true}
+```
+
+---
+
+## 13. 附錄 B:常用指令
+
+Python 一律用:
+`C:\Users\kiri\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\python\python.exe`
+
+```
+python batch_driver.py           # 11 個模型批量模擬 -> batch/
+python scan/scan.py              # 措施掃描 -> scan/
+python scan2/scan2.py            # 全部措施 + 組合與回收期(平行) -> scan2/
+python sensitivity.py            # 敏感度 -> report/index.html
+python db_import.py              # db_models/inbox/ 裡 DB 匯出的 IDF -> db_models/out/
+python handover/md2html.py handover/HANDOVER.md handover/HANDOVER.html   # 文件轉檔
+```
+
+PowerShell 端建議先:
+```
+[Console]::OutputEncoding=[Text.Encoding]::UTF8
+```
+
+PDF 產生(舊版 headless 才穩):
+```
+msedge.exe --headless --disable-gpu --no-sandbox --print-to-pdf="out.pdf" "file:///.../HANDOVER.html"
+```
+
+---
+
+## 14. 附錄 C:交接包內容
+
+```
+handover/
+├─ HANDOVER.md          本文件(純文字版)
+├─ HANDOVER.pdf         PDF 版
+├─ md2html.py           文件轉檔工具
+├─ code/                所有腳本副本
+├─ patches/             vendor 專案的 git diff
+└─ results/             batch / scan / scan2 的報告與 CSV、網站 index.html
+```
+
+---
+
+## 15. 變更紀錄(2026-10-29 ~ 10-30,Claude)
+
+**算錯的地方(會影響結論)**
+
+- plenum 被算進樓地板面積,照明投資與 EUI 分母多一倍 → 只算有 Lights 的 Zone。
+- 只算電、沒算天然氣 → 全部改成電 + 天然氣;回收期用電費 + 氣費。
+- `scan2` 不檢查修改工具是否成功,失敗時會拿上一輪的舊檔跑 → `apply()` 先刪舊檔、確認成功才模擬;照明失敗時組合也標失敗。
+- case study 的「miami」實際是 Tampa,面積用了含 plenum 的 927.2 m² → 改名、改 463.6 m²、EUI 含天然氣。
+
+**會讓流程壞掉的地方**
+
+- `patches/energyplus-mcp.patch` 是 UTF-16,`git apply` 會失敗,還夾帶被改寫的範例 IDF → 重新產生為 UTF-8,只含 `config.py`。
+- 天然氣價在 `scan2.py` 與 `sensitivity.py` 各寫一份 → `sensitivity.py` 改讀 `COSTS`;頁面的模型數 / 模擬次數改從結果檔算。
+- 所有腳本用相對路徑,不在工作區根目錄執行時會默默跳過 → 改以 `__file__` 為基準。
+- MCP server 掛掉要等 900 秒、看不到錯誤 → 偵測程序結束立即報錯,stderr 寫到 `logs/`。
+- `batch_driver` 有 3 個模型沒有電表 → 先用 MCP 補電表。
+- 中文檔名讓 E+ 失敗、MCP 卡住 → `db_import.py` 改用 ASCII 工作檔名。
+- `apply_windows_patches.py` 只認特定寫法、漏掉 `--version` 那處、插 import 的位置會造成語法錯誤 → 改用括號配對,4 處都補。
+- `md2html.py` 表格每列都變表頭、清單不會關閉 → 修正。
+
+**新增**
+
+- `db_import.py`:DB 匯出 IDF 的匯入流程(§4.2)。
+- `scan2.scan_parallel()`:最多 4 個 MCP server 平行跑,25 次模擬約 150 秒(原本 20 次約 330 秒)。
+- `scan2` 加入滲風措施,一次跑完全部措施。
+- 移除 git 全域代理設定(前任留下的本機代理已停用)。
+- `tools/modeler/build_idf.py`:不用 DB,輸入參數就建模(Ladybug Tools + OpenStudio 3.11,方形 / L 形)。
+  實測 3 層 40×25 m 辦公(VAV + 冰水主機 + 鍋爐):EUI 146.9 kWh/m²,5 個情境約 1 分鐘。
+- 整個工具鏈放到 private repo `Tanna-qne/building-energy-toolchain`(`report/` 與 `vendor/` 不在裡面)。
+
+**驗證方式**:重構後 `scan2` 依序與平行兩種跑法,和修改前逐筆比對結果一致;`db_import` 用 25.1 舊版 IDF
+與中文檔名實測,數字和 26.2 範例完全相同。各檔修改前的版本留在旁邊的 `*.bak-20261029`
+(`report/` 的在 `_bak-20261029/report/`)。

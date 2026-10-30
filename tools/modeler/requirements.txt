@@ -1,0 +1,4 @@
+dragonfly-energy==1.46.53
+honeybee-openstudio==0.10.0
+honeybee-energy-standards==2.3.5
+openstudio==3.11.0
