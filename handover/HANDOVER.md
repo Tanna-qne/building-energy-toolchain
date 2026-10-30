@@ -224,8 +224,8 @@ EUI 以電 + 天然氣計。舊版標成「miami」的兩組實際用的是 Tamp
 
 Repo https://github.com/Tanna-qne/building-energy-sensitivity(public)
 站點 https://tanna-qne.github.io/building-energy-sensitivity/
-另有帳號自訂網域 http://hedonotlikeme.com/building-energy-sensitivity/(github.io 會 301 轉址過去)
 Pages 狀態 `built`,已實測回 200。
+舊的自訂網域 `hedonotlikeme.com` 已過期,2026-10-30 已從使用者網站 repo 刪除 CNAME,不再使用。
 
 ---
 
