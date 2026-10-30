@@ -1,8 +1,8 @@
 diff --git a/energyplus-mcp-server/energyplus_mcp_server/config.py b/energyplus-mcp-server/energyplus_mcp_server/config.py
-index f57459f..54734b3 100644
+index f57459f..7ca40f5 100644
 --- a/energyplus-mcp-server/energyplus_mcp_server/config.py
 +++ b/energyplus-mcp-server/energyplus_mcp_server/config.py
-@@ -41,15 +41,23 @@ class EnergyPlusConfig:
+@@ -41,15 +41,24 @@ class EnergyPlusConfig:
  @dataclass
  class PathConfig:
      """Path configuration"""
@@ -13,7 +13,8 @@ index f57459f..54734b3 100644
      sample_files_path: str = ""
 -    temp_dir: str = "/tmp"
 -    output_dir: str = "/workspace/energyplus-mcp-server/outputs"
-+    temp_dir: str = os.path.join(os.environ.get("TEMP", _repo_dir), "energyplus-mcp")
++    # 放在 repo 內(和 outputs 同層): %TEMP% 底下在 sandbox / DSH 啟動的環境裡不一定能建資料夾
++    temp_dir: str = os.path.join(_repo_dir, "temp")
 +    output_dir: str = os.path.join(_repo_dir, "outputs")
      
      def __post_init__(self):
@@ -29,7 +30,7 @@ index f57459f..54734b3 100644
  
  
  @dataclass
-@@ -175,9 +183,10 @@ class Config:
+@@ -175,9 +184,10 @@ class Config:
              self.energyplus.idd_path = ep_idd_path
              # Derive installation path from IDD path
              self.energyplus.installation_path = os.path.dirname(ep_idd_path)
@@ -42,7 +43,7 @@ index f57459f..54734b3 100644
              )
              # Set weather data path
              self.energyplus.weather_data_path = os.path.join(
-@@ -189,10 +198,18 @@ class Config:
+@@ -189,10 +199,18 @@ class Config:
              )
          else:
              # Default paths
@@ -63,7 +64,7 @@ index f57459f..54734b3 100644
              # Set weather data path
              self.energyplus.weather_data_path = os.path.join(default_installation, "WeatherData")
              # Set example files path
-@@ -200,10 +217,19 @@ class Config:
+@@ -200,10 +218,19 @@ class Config:
          
          # Set default weather file
          self.energyplus.default_weather_file = os.path.join(

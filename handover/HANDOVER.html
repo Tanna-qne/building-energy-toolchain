@@ -12,7 +12,7 @@
 <tr><th>項目</th><th>狀態</th><th>備註</th></tr>
 <tr><td>EnergyPlus 26.2.0</td><td>✅ 可用</td><td>可攜版,免管理員</td></tr>
 <tr><td>EnergyPlus-MCP(35 工具)</td><td>✅ 可用</td><td>已用真實模型驗證</td></tr>
-<tr><td>MCP 在 DSH 對話內可用</td><td>⚠️ <strong>未驗證</strong></td><td>設定檔解析與路徑已驗證、照 DSH 方式啟動可列出 35 工具;仍需重啟 DSH 在對話內叫一次</td></tr>
+<tr><td>MCP 在 DSH 對話內可用</td><td>✅ 已驗證</td><td>2026-10-31:patch 改用 <code>insert:</code> 後 35 個 <code>mcp__energyplus__*</code> 都出現,<code>get_server_status</code> 正常(§5.3)</td></tr>
 <tr><td>批量模擬(11 模型)</td><td>✅ 11/11 成功</td><td>自動補電表,見 §6.1</td></tr>
 <tr><td>措施掃描(5×4)</td><td>✅ 20/20 成功</td><td>333 秒,含天然氣</td></tr>
 <tr><td>組合 + 回收期(5×5)</td><td>✅ 25/25 成功</td><td>平行 4 個 MCP,150 秒</td></tr>
@@ -118,19 +118,24 @@ cd vendor/EnergyPlus-MCP/energyplus-mcp-server
 <p><code>vendor/EnergyPlus-MCP/energyplus-mcp-server/datasets/</code>(部分模型用相對路徑引用)。</p>
 <h3>5.3 接進 DeepSeek Harness</h3>
 <p>設定檔:<code>C:\Users\kiri\.dsh\profiles\desktop\cordis.patch.yml</code>(<strong>不要改 <code>cordis.yml</code> 本體</strong>)。</p>
+<p><strong>新增 MCP 一定要包在 <code>insert:</code> 底下。</strong> patch 檔是「以 id 為目標的覆寫層」:直接寫 <code>- id: mcp-energyplus</code></p>
+<p>會被當成「修改既有的 mcp-energyplus」,找不到就警告後略過(舊版文件就是這樣寫,導致四個 MCP 全部沒載入)。</p>
+<p>可以用 <code>dsh --dump-config</code> 檢查:出現 <code>entry &quot;…&quot; not found</code> 就是寫錯了。</p>
 <pre>
-- id: mcp-energyplus
-  name: &quot;@deepseek-ai/dsh-mcp-client&quot;
-  config:
-    serverName: energyplus
-    transport: stdio
-    command: &quot;C:/Users/kiri/Documents/deepseek-harness/default-workspace/vendor/EnergyPlus-MCP/energyplus-mcp-server/.venv/Scripts/python.exe&quot;
-    args: [ &quot;-m&quot;, &quot;energyplus_mcp_server.server&quot; ]
-    cwd: &quot;C:/Users/kiri/Documents/deepseek-harness/default-workspace/vendor/EnergyPlus-MCP/energyplus-mcp-server&quot;
-    env:
-      EPLUS_IDD_PATH: &quot;C:/Users/kiri/AppData/Local/Programs/EnergyPlusV26-2-0/EnergyPlus-26.2.0-4bd7a1f26f-Windows-x86_64/Energy+.idd&quot;
+- insert:
+    - id: mcp-energyplus
+      name: &quot;@deepseek-ai/dsh-mcp-client&quot;
+      config:
+        serverName: energyplus
+        transport: stdio
+        command: &quot;C:/Users/kiri/Documents/deepseek-harness/default-workspace/vendor/EnergyPlus-MCP/energyplus-mcp-server/.venv/Scripts/python.exe&quot;
+        args: [ &quot;-m&quot;, &quot;energyplus_mcp_server.server&quot; ]
+        cwd: &quot;C:/Users/kiri/Documents/deepseek-harness/default-workspace/vendor/EnergyPlus-MCP/energyplus-mcp-server&quot;
+        env:
+          EPLUS_IDD_PATH: &quot;C:/Users/kiri/AppData/Local/Programs/EnergyPlusV26-2-0/EnergyPlus-26.2.0-4bd7a1f26f-Windows-x86_64/Energy+.idd&quot;
 </pre>
-<p>重啟 DSH 後工具會以 <code>mcp__energyplus__</code> 前綴出現。</p>
+<p>patch 層會熱重載,存檔後不用重開 DSH;工具以 <code>mcp__energyplus__</code> 前綴出現(2026-10-31 實測 35 個)。</p>
+<p>改之前的版本存在 <code>cordis.patch.yml.bak-before-insert</code>。</p>
 <hr>
 <h2>6. 已驗證的結果</h2>
 <h3>6.1 批量模擬(<code>batch/</code>,11 模型 / 156 秒 / 11 成功)</h3>
@@ -218,7 +223,7 @@ cd vendor/EnergyPlus-MCP/energyplus-mcp-server
 <p>6. <strong>Windows 主控台是 GBK</strong>:Python 印中文/²/emoji 會 <code>UnicodeEncodeError</code>。腳本開頭要</p>
 <p><code>sys.stdout.reconfigure(encoding=&quot;utf-8&quot;, errors=&quot;replace&quot;)</code>,PowerShell 端設 <code>[Console]::OutputEncoding</code>。</p>
 <p>7. <strong><code>uv sync</code> 會蓋掉 eppy patch</strong>,要重跑 <code>apply_windows_patches.py</code>。</p>
-<p>8. <strong>DSH 的 MCP 工具要重啟 app 才出現</strong>。</p>
+<p>8. <strong>DSH 新增 MCP 要寫在 <code>insert:</code> 底下</strong>,直接寫 <code>- id:</code> 會被當成覆寫不存在的條目而略過(§5.3)。patch 會熱重載,不用重開。</p>
 <p>9. <strong><code>edit</code> 工具要求先 <code>read</code> 過該檔</strong>;檔案被外部改過會要求重讀。</p>
 <p>10. <strong>E+ 讀不到非 ASCII 路徑</strong>:中文檔名會 <code>File not found</code>,而且 E+ 回傳的亂碼讓 MCP 送不出回應,</p>
 <p>client 會卡到逾時。<code>db_import.py</code> 已自動改用 ASCII 工作檔名;工作區路徑本身也要是 ASCII。</p>
@@ -237,9 +242,7 @@ cd vendor/EnergyPlus-MCP/energyplus-mcp-server
 <hr>
 <h2>9. 待辦(依優先序)</h2>
 <p>1. ~~用真正 DB 匯出的 IDF 跑 <code>db_import.py</code>~~:2026-10-31 完成。</p>
-<p>2. <strong>DSH 對話內沒有載入任何 MCP</strong>(energyplus、context7、serena 都沒有):server 本身沒問題(手動啟動可列出 35 工具),</p>
-<p>問題在 DSH 沒套用 <code>cordis.patch.yml</code> 的 MCP 條目。profile 的 <code>package.json</code> 沒列 MCP client 套件,</p>
-<p>安裝目錄另有一個 <code>DeepSeek Harness.new-{…}</code> 未套用的更新;要在 DSH 介面確認。</p>
+<p>2. ~~DSH 對話內沒有載入任何 MCP~~:2026-10-31 解決,原因是 patch 沒用 <code>insert:</code>(§5.3)。</p>
 <p>3. <strong>修 DB 模擬</strong>(可選):重裝 DB 時把 EnergyPlus 一起裝,或繼續用外部 E+ 取代。</p>
 <p>4. <strong>真實空調系統</strong>:目前掃描用的是範例模型自帶系統;若要算電費與碳排,</p>
 <p>應換成 PTAC/VAV 等真實系統並加電價、碳排係數。</p>
@@ -370,7 +373,8 @@ handover/
 <li><code>batch_driver.sim_args()</code>:只在需要時才跑 ExpandObjects。</li>
 <li><code>tests/smoke.py</code>:端到端檢查,2026-10-30 全部通過(約 20 分鐘);10-31 加入 DesignBuilder 實際匯出檔的項目。</li>
 <li>DesignBuilder 匯出檔跑通:窗戶性質改讀 <code>.eio</code>(DB 報表是英制)、理想負載換算成電與天然氣。</li>
-<li>MCP <code>config.py</code>:版本號從 IDD 讀(原本寫死 26.1.0),啟動時先建 temp 資料夾。</li>
+<li>MCP <code>config.py</code>:版本號從 IDD 讀(原本寫死 26.1.0);temp 資料夾改到 repo 內的 <code>temp/</code>(<code>%TEMP%</code> 底下在 DSH 與 sandbox 都建不了)。</li>
+<li>DSH:<code>cordis.patch.yml</code> 的四個 MCP 改寫在 <code>insert:</code> 底下(DSH 端完成),對話內 46 個 MCP 工具都已載入。</li>
 </ul>
 <p><strong>驗證方式</strong>:重構後 <code>scan2</code> 依序與平行兩種跑法,和修改前逐筆比對結果一致;<code>db_import</code> 用 25.1 舊版 IDF</p>
 <p>與中文檔名實測,數字和 26.2 範例完全相同。各檔修改前的版本留在旁邊的 <code>*.bak-20261029</code></p>
