@@ -49,8 +49,13 @@
 
 ## 也可以用 DesignBuilder 的模型
 
-DB 裡 File → Export → EnergyPlus → IDF,把檔案放進 `db_models/inbox/`,執行 `python db_import.py`。
-舊版 IDF 會自動升級到 E+ 26.2,中文檔名也可以。
+1. 在 DB 開啟模型,按工具列上的 **Export IDF model** 按鈕(File → Export 選單裡沒有 IDF)。
+   檔案預設存到 `文件\DesignBuilder Data\`。
+2. 把它複製到 `db_models/inbox/`,執行 `python db_import.py`,結果一樣在 `db_models/out/report.html`。
+
+DB 2025 匯出的是 E+ 23.1 版,會自動升級到 26.2;中文檔名、評估版的壓縮格式都可以。
+DB 預設的簡化空調是「理想負載」,只算出要供應多少冷 / 熱,報告會用假設效率換成用電與天然氣
+(冷氣 COP 3、暖氣與熱水用瓦斯鍋爐 85%,在 `scan2/scan2.py` 的 `IDEAL_COOL_COP` / `IDEAL_HEAT_EFF`)。
 
 ## 這套工具怎麼組成
 

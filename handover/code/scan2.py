@@ -36,6 +36,8 @@ COSTS = {
     "lighting_twd_per_m2_floor": 600,  # 燈具更新含施工, 假設值
 }
 
+IDEAL_COOL_COP = 3.0   # 理想負載換算: 冷氣(電)的 COP, 假設值
+IDEAL_HEAT_EFF = 0.85  # 理想負載換算: 暖氣與熱水用瓦斯鍋爐的效率, 假設值
 FILM_SHGC = 0.30       # 貼膜後的 SHGC
 FILM_SKIP_SHGC = 0.35  # 原窗 SHGC 已經不高於這個值就不貼, 效果有限
 
@@ -43,12 +45,12 @@ FILM_SKIP_SHGC = 0.35  # 原窗 SHGC 已經不高於這個值就不貼, 效果�
 def glazing(output_dir: Path):
     """從 E+ 報表的 Exterior Fenestration 取外窗面積加權的 (U, SHGC, 可見光穿透率); 沒有外窗回傳 None。"""
     table = next(output_dir.glob("*Table.htm"), None)
-    if not table:
-        return None
-    text = table.read_text(encoding="latin-1")
+    text = table.read_text(encoding="latin-1") if table else ""
     i = text.find("<b>Exterior Fenestration</b>")
-    if i < 0:
-        return None
+    if i < 0 or "Glass U-Factor [W/m2-K]" not in text[i:i + 5000]:
+        # DesignBuilder 匯出的模型常只開少數報表、而且用英制單位; 改讀 .eio 的 WindowConstruction(一律 SI,
+        # 數值與報表的 Glass U-Factor / SHGC 相同)。多種構造時取平均, 因為 .eio 沒有各自的面積
+        return glazing_from_eio(output_dir)
     block = text[i:text.find("</table>", i)]
     rows = [[re.sub(r"<[^>]+>", "", c).strip() for c in re.findall(r"<td[^>]*>(.*?)</td>", r, re.S)]
             for r in re.findall(r"<tr>(.*?)</tr>", block, re.S)]
@@ -60,6 +62,23 @@ def glazing(output_dir: Path):
     except (TypeError, ValueError):
         return None
     return u, shgc, vt
+
+
+def glazing_from_eio(output_dir: Path):
+    eio = next(output_dir.glob("*.eio"), None)
+    if not eio:
+        return None
+    vals = []
+    for line in eio.read_text(encoding="latin-1").splitlines():
+        p = [x.strip() for x in line.split(",")]
+        if p[0] == "WindowConstruction" and len(p) >= 11:
+            try:
+                vals.append((float(p[5]), float(p[8]), float(p[10])))
+            except ValueError:
+                pass
+    if not vals:
+        return None
+    return tuple(round(sum(v[k] for v in vals) / len(vals), 3) for k in range(3))
 
 
 def film_args(glz):
@@ -77,13 +96,26 @@ def run(client, idf: Path):
     started = time.time()
     payload = parse(client.tool("run_energyplus_simulation", sim_args(idf), 900))
     elec = gas = None
+    district = ""
     out_dir = payload.get("output_directory")
     if payload.get("success") and out_dir:
-        elec = meter_kwh(Path(out_dir), "Electricity:Facility")
+        od = Path(out_dir)
+        elec = meter_kwh(od, "Electricity:Facility")
         # 沒有天然氣電表的模型當作 0 (全電)
         if elec is not None:
-            gas = meter_kwh(Path(out_dir), "NaturalGas:Facility") or 0.0
-    return {"success": bool(payload.get("success")), "elec": elec, "gas": gas,
+            gas = meter_kwh(od, "NaturalGas:Facility") or 0.0
+            # 理想負載(DesignBuilder 的簡化空調)只算出要供應多少冷 / 熱, 記在 District 電表, 不是耗能;
+            # 用假設的設備效率換成電與天然氣, 否則空調能耗整個漏掉
+            cool = meter_kwh(od, "DistrictCooling:Facility") or 0.0
+            heat = (meter_kwh(od, "DistrictHeatingWater:Facility") or 0.0) + \
+                (meter_kwh(od, "DistrictHeatingSteam:Facility") or 0.0)
+            if cool or heat:
+                elec = round(elec + cool / IDEAL_COOL_COP, 1)
+                gas = round(gas + heat / IDEAL_HEAT_EFF, 1)
+                parts = [f"冷氣 {cool:,.0f} 度冷量以 COP {IDEAL_COOL_COP:g} 換成用電" if cool else "這個模型沒有開冷氣",
+                         f"暖氣與熱水 {heat:,.0f} 度熱量以鍋爐效率 {IDEAL_HEAT_EFF:.0%} 換成天然氣" if heat else "沒有暖氣"]
+                district = "空調是理想負載(DesignBuilder 的簡化空調):" + ",".join(parts)
+    return {"success": bool(payload.get("success")), "elec": elec, "gas": gas, "district": district,
             "seconds": round(time.time() - started, 1), "out_dir": out_dir,
             "error": (payload.get("error") or "")[:100]}
 
@@ -159,7 +191,7 @@ def scan_models(client, models, models_dir: Path):
 
         glz = glazing(Path(base["out_dir"])) if base["out_dir"] else None
         fargs, film_skip = film_args(glz)
-        notes = {}
+        notes = {"baseline": base.get("district", "")}
         if fargs:
             notes["film_shgc0.30"] = notes["lights+film"] = \
                 f"原窗 SHGC {glz[1]:.2f} → 貼膜後 {FILM_SHGC:.2f}(U 值維持 {glz[0]:.2f})"

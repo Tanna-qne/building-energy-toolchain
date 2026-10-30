@@ -105,6 +105,24 @@ def test_db_import_upgrade_and_unicode():
               f"{model}: 應為 43510.1 / 19018.4, 實際 {base['elec_kwh']} / {base['gas_kwh']}")
 
 
+def test_db_designbuilder_export():
+    """真正從 DesignBuilder 2025.1 匯出的 IDF(23.1 版、評估版壓縮格式、理想負載空調、英制報表)。"""
+    tmp = WS / "db_models" / "test_smoke"
+    shutil.rmtree(tmp, ignore_errors=True)
+    tmp.mkdir(parents=True)
+    shutil.copyfile(FIX / "designbuilder_v23_1.idf", tmp / "designbuilder_v23_1.idf")
+    code, log = run(WS / "db_import.py", tmp)
+    shutil.rmtree(tmp, ignore_errors=True)
+    check(code == 0, f"db_import 失敗:\n{log[-1500:]}")
+    check("升級 23.1 -> 23.2" in log and "升級 26.1 -> 26.2" in log, "沒有看到 23.1 -> 26.2 的升級鏈")
+    cases = all_cases_ok(rows(OUT / "results.csv"), "designbuilder_v23_1")
+    base = cases["baseline"]
+    check(float(base["gas_kwh"]) > 0 and "理想負載" in base["error"],
+          f"理想負載的暖氣沒有換算成天然氣: gas={base['gas_kwh']} note={base['error']}")
+    check("U 值維持 1.96" in cases["film_shgc0.30"]["error"], "沒有從 .eio 讀到窗戶性質")
+    check(float(cases["infil_x0.5"]["saving_pct"]) > 0, "只有暖氣的模型, 滲風減半應該要省")
+
+
 def test_scan2_samples():
     """5 個範例模型 × 5 情境平行跑完, 並重產生敏感度網頁。"""
     code, log = run(WS / "scan2" / "scan2.py")

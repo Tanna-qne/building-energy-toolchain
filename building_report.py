@@ -137,6 +137,8 @@ def model_section(name, rows, costs, meta):
 
     parts = [f"<section><h2>{html.escape(name)}</h2>",
              f'<p class="desc">{desc}樓地板 {floor:,.0f} m²。</p>' if floor else "",
+             # 基準的備註目前只有理想負載的換算說明; 這會影響所有數字, 所以放在結論上面
+             f'<p class="desc">注意:{html.escape(base["error"])}(設備效率是假設值)。</p>' if base.get("error") else "",
              f'<div class="headline">{html.escape(headline)}</div>',
              "<h3>這棟建築一年用多少能源</h3>",
              '<div class="tiles">',
@@ -155,7 +157,7 @@ def model_section(name, rows, costs, meta):
                          else f"總能源多用 {abs(c['pct'] or 0):.1f}%")
             fact = (f"{'少' if c['s_elec'] >= 0 else '多'}用電 {abs(c['s_elec']):,.0f} 度、"
                     f"{'少' if c['s_gas'] >= 0 else '多'}用天然氣 {abs(c['s_gas']):,.0f} 度")
-            if c["s_elec"] > 0 and c["s_gas"] < 0:
+            if c["s_elec"] >= 0 and c["s_gas"] < 0:
                 fact += GAS_UP_WHY.get(c["case"], "(室內的熱變少,冬天要靠暖氣補回來)")
             facts.append(fact)
             if c["capex"]:

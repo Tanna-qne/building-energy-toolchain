@@ -26,7 +26,7 @@
 | 組合 + 回收期(5×5) | ✅ 25/25 成功 | 平行 4 個 MCP,150 秒 |
 | 敏感度 + 網頁報告 | ✅ 已上線 | GitHub Pages |
 | DesignBuilder 模擬 | ❌ 不可用 | 缺 EnergyPlus 引擎(§4.1) |
-| DB IDF 匯入(`db_import.py`) | ✅ 流程可用 | 用 25.1 舊版 IDF 與中文檔名實測通過;**真正 DB 匯出的檔還沒測** |
+| DB IDF 匯入(`db_import.py`) | ✅ 已驗證 | 2026-10-31 用 DB 2025.1 實際匯出的 IDF(23.1 版、理想負載)跑通,已列入 `tests/smoke.py` |
 
 ---
 
@@ -80,7 +80,8 @@ IDF 模型 ──> EnergyPlus-MCP(stdio JSON-RPC)──> EnergyPlus 26.2 ──>
 
 ### 4.2 替代路線(目前唯一可行的 DB 用法)
 
-DB 建模 → **匯出 IDF**(File → Export → EnergyPlus → IDF,匯出不需要引擎)→ 放進 `db_models\inbox\` →
+DB 建模 → **匯出 IDF**(工具列的 **Export IDF model** 按鈕;File → Export 選單裡沒有 IDF。不需要引擎,
+預設存到 `文件\DesignBuilder Data\`)→ 放進 `db_models\inbox\` →
 `python db_import.py`。結果在 `db_models/out/report.md`,中間檔在 `db_models/work/`。
 
 `db_import.py` 依序做:
@@ -93,7 +94,13 @@ DB 建模 → **匯出 IDF**(File → Export → EnergyPlus → IDF,匯出不需
 5. 交給 `scan2.scan_parallel()` 跑基準 + 全部措施。
 
 DB 自帶 20 多個範例模型在 `C:\ProgramData\DesignBuilder\Templates\*.dsb`,不用自己建模就能測。
-**還沒用真正 DB 匯出的檔測過**,若遇到 DB 特有物件報錯,看 `logs/mcp-*.log` 與輸出目錄的 `.err`。
+**已用真正 DB 匯出的檔驗證**(Model Geometry Example 範例,`tests/fixtures/designbuilder_v23_1.idf`):
+升級 23.1 → 26.2 共 7 步都成功。DB 檔的三個特點,流程已處理:
+
+- 評估版會輸出「壓縮格式」IDF(檔頭有說明),E+ 可以正常讀。
+- 只開了少數報表、而且是英制單位,沒有 SI 的外殼摘要 → 窗戶性質改讀 `.eio` 的 `WindowConstruction`(數值與報表相同,已比對)。
+- 空調是 `ZoneHVAC:IdealLoadsAirSystem`,冷 / 熱記在 `DistrictCooling` / `DistrictHeatingWater` 電表 →
+  `scan2.run()` 以 COP 3 / 鍋爐 85% 換成電與天然氣,報告開頭會註明。
 
 ---
 
@@ -287,9 +294,10 @@ Pages 狀態 `built`,已實測回 200。
 
 ## 9. 待辦(依優先序)
 
-1. **用真正 DB 匯出的 IDF 跑 `db_import.py`**:從 DB 範例(`C:\ProgramData\DesignBuilder\Templates\`)
-   匯出一個丟進 `db_models\inbox\`。需要人在 DB 介面操作。
-2. **重啟 DSH 驗證 MCP**:設定與 server 已驗證,但從未在對話內實際叫過 `mcp__energyplus__*`。
+1. ~~用真正 DB 匯出的 IDF 跑 `db_import.py`~~:2026-10-31 完成。
+2. **DSH 對話內沒有載入任何 MCP**(energyplus、context7、serena 都沒有):server 本身沒問題(手動啟動可列出 35 工具),
+   問題在 DSH 沒套用 `cordis.patch.yml` 的 MCP 條目。profile 的 `package.json` 沒列 MCP client 套件,
+   安裝目錄另有一個 `DeepSeek Harness.new-{…}` 未套用的更新;要在 DSH 介面確認。
 3. **修 DB 模擬**(可選):重裝 DB 時把 EnergyPlus 一起裝,或繼續用外部 E+ 取代。
 4. **真實空調系統**:目前掃描用的是範例模型自帶系統;若要算電費與碳排,
    應換成 PTAC/VAV 等真實系統並加電價、碳排係數。
@@ -437,7 +445,9 @@ handover/
 - `run_building.py` + `building_report.py`:一個指令從參數到白話網頁報告。
 - 貼膜改成依原窗調整(只降 SHGC、U 值不變;原窗已能遮陽就不貼)。範例辦公大樓從「多耗 7.7%」變成「省 0.8%」。
 - `batch_driver.sim_args()`:只在需要時才跑 ExpandObjects。
-- `tests/smoke.py`:7 項端到端檢查,2026-10-30 全部通過(約 20 分鐘)。
+- `tests/smoke.py`:端到端檢查,2026-10-30 全部通過(約 20 分鐘);10-31 加入 DesignBuilder 實際匯出檔的項目。
+- DesignBuilder 匯出檔跑通:窗戶性質改讀 `.eio`(DB 報表是英制)、理想負載換算成電與天然氣。
+- MCP `config.py`:版本號從 IDD 讀(原本寫死 26.1.0),啟動時先建 temp 資料夾。
 
 **驗證方式**:重構後 `scan2` 依序與平行兩種跑法,和修改前逐筆比對結果一致;`db_import` 用 25.1 舊版 IDF
 與中文檔名實測,數字和 26.2 範例完全相同。各檔修改前的版本留在旁邊的 `*.bak-20261029`

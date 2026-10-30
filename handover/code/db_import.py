@@ -94,7 +94,9 @@ def prepare(client, src: Path, name: str):
 
     step = apply(client, "add_output_meters",
                  {"idf_path": str(work.resolve()), "validation_level": "lenient",
-                  "meters": [["Electricity:Facility", "RunPeriod"], ["NaturalGas:Facility", "RunPeriod"]]},
+                  # District 兩項給理想負載的模型用(DesignBuilder 預設的簡化空調), scan2.run() 會換算成電與氣
+                  "meters": [["Electricity:Facility", "RunPeriod"], ["NaturalGas:Facility", "RunPeriod"],
+                             ["DistrictCooling:Facility", "RunPeriod"], ["DistrictHeatingWater:Facility", "RunPeriod"]]},
                  WORK / f"{name}__ready.idf")
     return step or work
 

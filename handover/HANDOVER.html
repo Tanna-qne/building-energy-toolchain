@@ -18,7 +18,7 @@
 <tr><td>組合 + 回收期(5×5)</td><td>✅ 25/25 成功</td><td>平行 4 個 MCP,150 秒</td></tr>
 <tr><td>敏感度 + 網頁報告</td><td>✅ 已上線</td><td>GitHub Pages</td></tr>
 <tr><td>DesignBuilder 模擬</td><td>❌ 不可用</td><td>缺 EnergyPlus 引擎(§4.1)</td></tr>
-<tr><td>DB IDF 匯入(<code>db_import.py</code>)</td><td>✅ 流程可用</td><td>用 25.1 舊版 IDF 與中文檔名實測通過;<strong>真正 DB 匯出的檔還沒測</strong></td></tr>
+<tr><td>DB IDF 匯入(<code>db_import.py</code>)</td><td>✅ 已驗證</td><td>2026-10-31 用 DB 2025.1 實際匯出的 IDF(23.1 版、理想負載)跑通,已列入 <code>tests/smoke.py</code></td></tr>
 </table>
 <hr>
 <h2>2. 環境</h2>
@@ -67,7 +67,8 @@ IDF 模型 ──&gt; EnergyPlus-MCP(stdio JSON-RPC)──&gt; EnergyPlus 26.2 �
 <li><strong>結論</strong>:DB 的 Simulation 按鈕大概率無法用。要修只能重裝 DB 並把 EnergyPlus 一起裝上。</li>
 </ul>
 <h3>4.2 替代路線(目前唯一可行的 DB 用法)</h3>
-<p>DB 建模 → <strong>匯出 IDF</strong>(File → Export → EnergyPlus → IDF,匯出不需要引擎)→ 放進 <code>db_models\inbox\</code> →</p>
+<p>DB 建模 → <strong>匯出 IDF</strong>(工具列的 <strong>Export IDF model</strong> 按鈕;File → Export 選單裡沒有 IDF。不需要引擎,</p>
+<p>預設存到 <code>文件\DesignBuilder Data\</code>)→ 放進 <code>db_models\inbox\</code> →</p>
 <p><code>python db_import.py</code>。結果在 <code>db_models/out/report.md</code>,中間檔在 <code>db_models/work/</code>。</p>
 <p><code>db_import.py</code> 依序做:</p>
 <p>1. 複製到 <code>db_models/work/</code>;非 ASCII 檔名改用 ASCII 工作名(E+ 讀不到中文路徑),報告仍顯示原名。</p>
@@ -77,7 +78,14 @@ IDF 模型 ──&gt; EnergyPlus-MCP(stdio JSON-RPC)──&gt; EnergyPlus 26.2 �
 <p>4. MCP <code>add_output_meters</code>:補 <code>Electricity:Facility</code>、<code>NaturalGas:Facility</code>(RunPeriod)。</p>
 <p>5. 交給 <code>scan2.scan_parallel()</code> 跑基準 + 全部措施。</p>
 <p>DB 自帶 20 多個範例模型在 <code>C:\ProgramData\DesignBuilder\Templates\*.dsb</code>,不用自己建模就能測。</p>
-<p><strong>還沒用真正 DB 匯出的檔測過</strong>,若遇到 DB 特有物件報錯,看 <code>logs/mcp-*.log</code> 與輸出目錄的 <code>.err</code>。</p>
+<p><strong>已用真正 DB 匯出的檔驗證</strong>(Model Geometry Example 範例,<code>tests/fixtures/designbuilder_v23_1.idf</code>):</p>
+<p>升級 23.1 → 26.2 共 7 步都成功。DB 檔的三個特點,流程已處理:</p>
+<ul>
+<li>評估版會輸出「壓縮格式」IDF(檔頭有說明),E+ 可以正常讀。</li>
+<li>只開了少數報表、而且是英制單位,沒有 SI 的外殼摘要 → 窗戶性質改讀 <code>.eio</code> 的 <code>WindowConstruction</code>(數值與報表相同,已比對)。</li>
+<li>空調是 <code>ZoneHVAC:IdealLoadsAirSystem</code>,冷 / 熱記在 <code>DistrictCooling</code> / <code>DistrictHeatingWater</code> 電表 →</li>
+</ul>
+<p><code>scan2.run()</code> 以 COP 3 / 鍋爐 85% 換成電與天然氣,報告開頭會註明。</p>
 <hr>
 <h2>5. 安裝與設定(可重建)</h2>
 <h3>5.1 EnergyPlus</h3>
@@ -228,9 +236,10 @@ cd vendor/EnergyPlus-MCP/energyplus-mcp-server
 <p>在 Claude 的 sandbox 下觀察到)。所以 <code>run_building.py</code> 用主 Python 當父程序:先呼叫 venv 建模、建完結束,再自己跑 <code>db_import</code>。</p>
 <hr>
 <h2>9. 待辦(依優先序)</h2>
-<p>1. <strong>用真正 DB 匯出的 IDF 跑 <code>db_import.py</code></strong>:從 DB 範例(<code>C:\ProgramData\DesignBuilder\Templates\</code>)</p>
-<p>匯出一個丟進 <code>db_models\inbox\</code>。需要人在 DB 介面操作。</p>
-<p>2. <strong>重啟 DSH 驗證 MCP</strong>:設定與 server 已驗證,但從未在對話內實際叫過 <code>mcp__energyplus__*</code>。</p>
+<p>1. ~~用真正 DB 匯出的 IDF 跑 <code>db_import.py</code>~~:2026-10-31 完成。</p>
+<p>2. <strong>DSH 對話內沒有載入任何 MCP</strong>(energyplus、context7、serena 都沒有):server 本身沒問題(手動啟動可列出 35 工具),</p>
+<p>問題在 DSH 沒套用 <code>cordis.patch.yml</code> 的 MCP 條目。profile 的 <code>package.json</code> 沒列 MCP client 套件,</p>
+<p>安裝目錄另有一個 <code>DeepSeek Harness.new-{…}</code> 未套用的更新;要在 DSH 介面確認。</p>
 <p>3. <strong>修 DB 模擬</strong>(可選):重裝 DB 時把 EnergyPlus 一起裝,或繼續用外部 E+ 取代。</p>
 <p>4. <strong>真實空調系統</strong>:目前掃描用的是範例模型自帶系統;若要算電費與碳排,</p>
 <p>應換成 PTAC/VAV 等真實系統並加電價、碳排係數。</p>
@@ -359,7 +368,9 @@ handover/
 <li><code>run_building.py</code> + <code>building_report.py</code>:一個指令從參數到白話網頁報告。</li>
 <li>貼膜改成依原窗調整(只降 SHGC、U 值不變;原窗已能遮陽就不貼)。範例辦公大樓從「多耗 7.7%」變成「省 0.8%」。</li>
 <li><code>batch_driver.sim_args()</code>:只在需要時才跑 ExpandObjects。</li>
-<li><code>tests/smoke.py</code>:7 項端到端檢查,2026-10-30 全部通過(約 20 分鐘)。</li>
+<li><code>tests/smoke.py</code>:端到端檢查,2026-10-30 全部通過(約 20 分鐘);10-31 加入 DesignBuilder 實際匯出檔的項目。</li>
+<li>DesignBuilder 匯出檔跑通:窗戶性質改讀 <code>.eio</code>(DB 報表是英制)、理想負載換算成電與天然氣。</li>
+<li>MCP <code>config.py</code>:版本號從 IDD 讀(原本寫死 26.1.0),啟動時先建 temp 資料夾。</li>
 </ul>
 <p><strong>驗證方式</strong>:重構後 <code>scan2</code> 依序與平行兩種跑法,和修改前逐筆比對結果一致;<code>db_import</code> 用 25.1 舊版 IDF</p>
 <p>與中文檔名實測,數字和 26.2 範例完全相同。各檔修改前的版本留在旁邊的 <code>*.bak-20261029</code></p>
