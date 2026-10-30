@@ -1,0 +1,7 @@
+{
+  "name": "small_office",
+  "width": 20, "depth": 12,
+  "stories": 1,
+  "building_type": "SmallOffice",
+  "hvac": "PTAC_ElectricBaseboard"
+}

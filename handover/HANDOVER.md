@@ -239,6 +239,7 @@ Pages 狀態 `built`,已實測回 200。
 | `db_import.py` | DB 匯出的 IDF → 升版 → 補電表 → `scan_parallel()`(§4.2) |
 | `run_building.py` | **一般人用的入口**:`python run_building.py 參數.json` → 呼叫 `build_idf.py` 建模 → `db_import` 跑全部措施 → `db_models/out/report.html` |
 | `tools/modeler/build_idf.py` | 參數 JSON(尺寸 / 樓層 / 窗牆比 / 用途 / 空調)→ Ladybug Tools + OpenStudio 建模 → IDF(放進 `db_models/inbox/`,參數另存同名 `.json`)。用自己的 venv(`tools/modeler/.venv`) |
+| `tests/smoke.py` | 端到端檢查,7 項:建模(長方形 / L 形、VAV / PSZ / PTAC)、錯誤提示、DB 匯入升級與中文檔名、scan2 + 敏感度、批量、eppy patch。已知數字(EUI 146.9、43,510.1 / 19,018.4 kWh)當回歸基準。範例檔在 `tests/fixtures/` |
 | `building_report.py` | 把結果寫成白話網頁:一句結論、一年能源與費用、每個措施省多少錢的長條圖、「值得考慮 / 看情況 / 不太划算」判讀。`scan2.write_outputs()` 自動呼叫 |
 | `sensitivity.py` | 電價/成本敏感度 → 產生 `report/index.html` 與 `sensitivity.csv` |
 | `db-energy-case/dbcase.py` | 早期的獨立分析工具:讀 `eplusout.csv`/`eplusmtr.csv` 算 EUI 與分項(不經 MCP);已被 `db_import.py` 取代 |
@@ -436,6 +437,7 @@ handover/
 - `run_building.py` + `building_report.py`:一個指令從參數到白話網頁報告。
 - 貼膜改成依原窗調整(只降 SHGC、U 值不變;原窗已能遮陽就不貼)。範例辦公大樓從「多耗 7.7%」變成「省 0.8%」。
 - `batch_driver.sim_args()`:只在需要時才跑 ExpandObjects。
+- `tests/smoke.py`:7 項端到端檢查,2026-10-30 全部通過(約 20 分鐘)。
 
 **驗證方式**:重構後 `scan2` 依序與平行兩種跑法,和修改前逐筆比對結果一致;`db_import` 用 25.1 舊版 IDF
 與中文檔名實測,數字和 26.2 範例完全相同。各檔修改前的版本留在旁邊的 `*.bak-20261029`

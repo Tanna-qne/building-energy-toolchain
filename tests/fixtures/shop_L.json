@@ -1,0 +1,10 @@
+{
+  "name": "shop_L",
+  "shape": "L",
+  "width": 50, "depth": 40,
+  "notch_width": 25, "notch_depth": 20,
+  "stories": 2,
+  "wwr": 0.3,
+  "building_type": "Retail",
+  "hvac": "PSZAC_GasCoil"
+}

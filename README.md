@@ -64,6 +64,16 @@ DB 裡 File → Export → EnergyPlus → IDF,把檔案放進 `db_models/inbox/`
 腳本:`tools/modeler/build_idf.py`(參數 → IDF)、`db_import.py`(升級 → 補電表 → 跑措施)、
 `scan2/scan2.py`(措施、組合、回收期,最多 4 個模擬平行)、`sensitivity.py`(電價 / 成本敏感度網頁)。
 
+## 檢查是不是都還能用
+
+```
+python tests/smoke.py
+```
+
+把所有重要功能實際跑一次(約 15–20 分鐘):參數建模(長方形 / L 形、三種空調)、參數填錯的提示、
+舊版 IDF 升級與中文檔名、5 個範例模型的措施與敏感度網頁、11 個模型批量模擬、eppy 修正。
+改過程式、`uv sync` 或升級 EnergyPlus 之後跑一次,全部 PASS 才算正常。
+
 ## 安裝(新機器)
 
 - EnergyPlus 26.2、EnergyPlus-MCP 與 Windows 修正:見 `handover/HANDOVER.md` §5。

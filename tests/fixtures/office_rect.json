@@ -1,0 +1,13 @@
+{
+  "name": "demo_office",
+  "shape": "rect",
+  "width": 40,
+  "depth": 25,
+  "stories": 3,
+  "floor_height": 3.6,
+  "wwr": 0.4,
+  "building_type": "MediumOffice",
+  "climate_zone": 5,
+  "construction": "SteelFramed",
+  "hvac": "VAV_Chiller_Boiler"
+}

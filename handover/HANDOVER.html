@@ -187,6 +187,7 @@ cd vendor/EnergyPlus-MCP/energyplus-mcp-server
 <tr><td><code>db_import.py</code></td><td>DB 匯出的 IDF → 升版 → 補電表 → <code>scan_parallel()</code>(§4.2)</td></tr>
 <tr><td><code>run_building.py</code></td><td><strong>一般人用的入口</strong>:<code>python run_building.py 參數.json</code> → 呼叫 <code>build_idf.py</code> 建模 → <code>db_import</code> 跑全部措施 → <code>db_models/out/report.html</code></td></tr>
 <tr><td><code>tools/modeler/build_idf.py</code></td><td>參數 JSON(尺寸 / 樓層 / 窗牆比 / 用途 / 空調)→ Ladybug Tools + OpenStudio 建模 → IDF(放進 <code>db_models/inbox/</code>,參數另存同名 <code>.json</code>)。用自己的 venv(<code>tools/modeler/.venv</code>)</td></tr>
+<tr><td><code>tests/smoke.py</code></td><td>端到端檢查,7 項:建模(長方形 / L 形、VAV / PSZ / PTAC)、錯誤提示、DB 匯入升級與中文檔名、scan2 + 敏感度、批量、eppy patch。已知數字(EUI 146.9、43,510.1 / 19,018.4 kWh)當回歸基準。範例檔在 <code>tests/fixtures/</code></td></tr>
 <tr><td><code>building_report.py</code></td><td>把結果寫成白話網頁:一句結論、一年能源與費用、每個措施省多少錢的長條圖、「值得考慮 / 看情況 / 不太划算」判讀。<code>scan2.write_outputs()</code> 自動呼叫</td></tr>
 <tr><td><code>sensitivity.py</code></td><td>電價/成本敏感度 → 產生 <code>report/index.html</code> 與 <code>sensitivity.csv</code></td></tr>
 <tr><td><code>db-energy-case/dbcase.py</code></td><td>早期的獨立分析工具:讀 <code>eplusout.csv</code>/<code>eplusmtr.csv</code> 算 EUI 與分項(不經 MCP);已被 <code>db_import.py</code> 取代</td></tr>
@@ -358,6 +359,7 @@ handover/
 <li><code>run_building.py</code> + <code>building_report.py</code>:一個指令從參數到白話網頁報告。</li>
 <li>貼膜改成依原窗調整(只降 SHGC、U 值不變;原窗已能遮陽就不貼)。範例辦公大樓從「多耗 7.7%」變成「省 0.8%」。</li>
 <li><code>batch_driver.sim_args()</code>:只在需要時才跑 ExpandObjects。</li>
+<li><code>tests/smoke.py</code>:7 項端到端檢查,2026-10-30 全部通過(約 20 分鐘)。</li>
 </ul>
 <p><strong>驗證方式</strong>:重構後 <code>scan2</code> 依序與平行兩種跑法,和修改前逐筆比對結果一致;<code>db_import</code> 用 25.1 舊版 IDF</p>
 <p>與中文檔名實測,數字和 26.2 範例完全相同。各檔修改前的版本留在旁邊的 <code>*.bak-20261029</code></p>
