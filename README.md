@@ -25,13 +25,15 @@
    L 形用 `"shape": "L"`,再加 `notch_width`、`notch_depth`(從右上角挖掉的大小)。
    `name`、`width`、`depth` 必填,其他不填就用上面的預設值;填錯會列出可用的選項。
 
-2. 執行:
+2. 執行(用主 Python,它會自己呼叫建模工具的 venv):
 
    ```
-   tools/modeler/.venv/Scripts/python.exe tools/modeler/build_idf.py 你的檔案.json
+   python run_building.py 你的檔案.json
    ```
 
-3. 看結果:`db_models/out/report.md`(用電、天然氣、EUI、年省 %、投資、回收期)。
+3. 用瀏覽器打開 `db_models/out/report.html`:最上面一句話告訴你哪個措施最划算,
+   下面依序是一年用多少能源、每個措施一年省多少錢,以及「值得考慮 / 看情況 / 不太划算」的白話判讀。
+   給工程師看的明細在同資料夾的 `report.md` 與 `results.csv`。
 
 一棟 3 層、15 個 zone 的辦公大樓,從建模到跑完 5 個情境約 1–2 分鐘。
 
@@ -79,7 +81,7 @@ DB 裡 File → Export → EnergyPlus → IDF,把檔案放進 `db_models/inbox/`
 
 - 只支援方形與 L 形;複雜造型請用 DesignBuilder 建模後匯出。
 - 氣象檔固定 Chicago;成本(電價、氣價、貼膜、燈具)是假設值,在 `scan2/scan2.py` 的 `COSTS`。
-- 措施工具的參數是固定的(例如貼膜固定 U=3.0),對已經很隔熱的新建築可能反而變差,要看個案。
+- 照明 −30%、滲風 ×0.5 是固定比例;貼膜會依原窗調整(只降 SHGC、U 值不變,原窗已經能遮陽就不貼)。
 
 ## 授權
 

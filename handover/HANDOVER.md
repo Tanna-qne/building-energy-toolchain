@@ -191,20 +191,21 @@ DemandLimiting 照明省得少不是 bug:照明確實改到了(16 → 11.2 W/m²
 成本假設(集中在 `scan2.py` 的 `COSTS`,`sensitivity.py` 也讀這裡):電價 4.5 TWD/kWh、
 天然氣 1.5 TWD/kWh、貼膜 1,200 TWD/m² 玻璃、照明 600 TWD/m² 樓地板。
 面積從 `.eio` 自動取;樓地板只算有照明的 Zone(5 區模型 463.6 m²,舊版誤把 plenum 算進去成 927.2 m²)。
+貼膜從基準報表讀原窗 U / SHGC / VT,只把 SHGC 降到 0.30、U 值維持;原窗 SHGC ≤ 0.35 就不貼(舊版固定 U = 3.0,會把好窗換成差窗)。
 
 | 模型 | 照明 | 貼膜 | 組合 | 組合回收期 | 滲風 |
 |---|---|---|---|---|---|
-| 5ZoneAirCooled | −10.0% | −0.2% | −11.4% | 9.6 年 | −1.5% |
-| 5ZoneAirCooledConvCoef | −10.4% | −0.0% | −10.4% | 10.3 年 | −0.5% |
-| 5ZoneAirCooledDemandLimiting | −2.8% | −3.1% | −5.9% | 43.2 年 | −0.5% |
-| HVACTemplate-5ZoneVAVFanPowered | −10.5% | −2.0% | −12.2% | 7.8 年 | −0.2% |
-| HVACTemplate-5ZoneBaseboardHeat | −18.9% | +0.1% | −18.8% | 11.0 年 | −0.3% |
+| 5ZoneAirCooled | −10.0% | +0.5% | −10.7% | 9.8 年 | −1.5% |
+| 5ZoneAirCooledConvCoef | −10.4% | +0.2% | −10.1% | 10.3 年 | −0.5% |
+| 5ZoneAirCooledDemandLimiting | −2.8% | −2.6% | −5.4% | 45.8 年 | −0.5% |
+| HVACTemplate-5ZoneVAVFanPowered | −10.5% | −1.7% | −11.8% | 7.9 年 | −0.2% |
+| HVACTemplate-5ZoneBaseboardHeat | −18.9% | +0.2% | −18.6% | 11.0 年 | −0.3% |
 
 ### 6.4 敏感度與網頁(`report/`)
 
 電價 2 / 3 / 4.5 / 6 / 8 / 10 / 12 TWD/kWh × 成本倍數 0.5 / 0.75 / 1 / 1.5 / 2(天然氣價固定)。
 因為有天然氣項,回收期對電價不再是純雙曲線:電價翻倍時,回收期砍得比一半更多。
-最快:VAV 機型貼膜,4.5 TWD 時 7.0 年;最慢:Baseboard 貼膜 259 年。滲風沒有成本假設,不列入。
+最快:VAV 機型貼膜,4.5 TWD 時 7.4 年;最慢:Baseboard 貼膜 396 年。滲風沒有成本假設,不列入。
 
 ### 6.5 氣候對照(`db-energy-case/case_study`,5ZoneAirCooled,463.6 m²)
 
@@ -236,7 +237,9 @@ Pages 狀態 `built`,已實測回 200。
 | `scan/scan.py` | 措施掃描(照明/貼膜/滲風),含 `lighting_scaled_updates()`;功能已被 `scan2` 涵蓋 |
 | `scan2/scan2.py` | 全部措施 + 組合 + 成本/回收期;`scan_parallel()` 平行跑、`areas()` 從 `.eio` 取面積、`apply()` 檢查修改工具是否成功 |
 | `db_import.py` | DB 匯出的 IDF → 升版 → 補電表 → `scan_parallel()`(§4.2) |
-| `tools/modeler/build_idf.py` | 參數 JSON(尺寸 / 樓層 / 窗牆比 / 用途 / 空調)→ Ladybug Tools + OpenStudio 建模 → IDF → `db_import.py`。用自己的 venv(`tools/modeler/.venv`),用法見根目錄 `README.md` |
+| `run_building.py` | **一般人用的入口**:`python run_building.py 參數.json` → 呼叫 `build_idf.py` 建模 → `db_import` 跑全部措施 → `db_models/out/report.html` |
+| `tools/modeler/build_idf.py` | 參數 JSON(尺寸 / 樓層 / 窗牆比 / 用途 / 空調)→ Ladybug Tools + OpenStudio 建模 → IDF(放進 `db_models/inbox/`,參數另存同名 `.json`)。用自己的 venv(`tools/modeler/.venv`) |
+| `building_report.py` | 把結果寫成白話網頁:一句結論、一年能源與費用、每個措施省多少錢的長條圖、「值得考慮 / 看情況 / 不太划算」判讀。`scan2.write_outputs()` 自動呼叫 |
 | `sensitivity.py` | 電價/成本敏感度 → 產生 `report/index.html` 與 `sensitivity.csv` |
 | `db-energy-case/dbcase.py` | 早期的獨立分析工具:讀 `eplusout.csv`/`eplusmtr.csv` 算 EUI 與分項(不經 MCP);已被 `db_import.py` 取代 |
 | `vendor/EnergyPlus-MCP/apply_windows_patches.py` | 重套 eppy 的 stdin 修正(放在 `energyplus-mcp-server/` 下跑) |
@@ -276,6 +279,8 @@ Pages 狀態 `built`,已實測回 200。
 16. **dragonfly 的 `set_all_room_2d_hvac` 預設 `conditioned_only=True`**,新建的 zone 會全被跳過、模型沒有空調
     (症狀:天然氣 0、只有照明措施有效果)。`build_idf.py` 已傳 `conditioned_only=False`。
 17. **Ladybug Tools 會在 `HOME` / `APPDATA` 建資料夾**,sandbox 下會 `WinError 5`;`build_idf.py` 把兩者指到 `tools/modeler/home/`。
+18. **由 `tools/modeler/.venv` 的 Python 帶起的 E+ Transition 程式會當掉**(gfortran backtrace,環境變數與 PATH 完全相同也一樣,
+    在 Claude 的 sandbox 下觀察到)。所以 `run_building.py` 用主 Python 當父程序:先呼叫 venv 建模、建完結束,再自己跑 `db_import`。
 
 ---
 
@@ -428,6 +433,9 @@ handover/
 - `tools/modeler/build_idf.py`:不用 DB,輸入參數就建模(Ladybug Tools + OpenStudio 3.11,方形 / L 形)。
   實測 3 層 40×25 m 辦公(VAV + 冰水主機 + 鍋爐):EUI 146.9 kWh/m²,5 個情境約 1 分鐘。
 - 整個工具鏈放到 private repo `Tanna-qne/building-energy-toolchain`(`report/` 與 `vendor/` 不在裡面)。
+- `run_building.py` + `building_report.py`:一個指令從參數到白話網頁報告。
+- 貼膜改成依原窗調整(只降 SHGC、U 值不變;原窗已能遮陽就不貼)。範例辦公大樓從「多耗 7.7%」變成「省 0.8%」。
+- `batch_driver.sim_args()`:只在需要時才跑 ExpandObjects。
 
 **驗證方式**:重構後 `scan2` 依序與平行兩種跑法,和修改前逐筆比對結果一致;`db_import` 用 25.1 舊版 IDF
 與中文檔名實測,數字和 26.2 範例完全相同。各檔修改前的版本留在旁邊的 `*.bak-20261029`

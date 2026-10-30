@@ -27,17 +27,20 @@ python scan2/scan2.py
 
 | 模型 | 照明 −30% | 貼膜 | 組合 | 組合回收期 | 滲風 ×0.5 |
 |---|---|---|---|---|---|
-| 5ZoneAirCooled | −10.0% | −0.2% | −11.4% | 9.6 年 | −1.5% |
-| 5ZoneAirCooledConvCoef | −10.4% | −0.0% | −10.4% | 10.3 年 | −0.5% |
-| 5ZoneAirCooledDemandLimiting | −2.8% | −3.1% | −5.9% | 43.2 年 | −0.5% |
-| HVACTemplate-5ZoneVAVFanPowered | −10.5% | −2.0% | −12.2% | 7.8 年 | −0.2% |
-| HVACTemplate-5ZoneBaseboardHeat | −18.9% | +0.1% | −18.8% | 11.0 年 | −0.3% |
+| 5ZoneAirCooled | −10.0% | +0.5% | −10.7% | 9.8 年 | −1.5% |
+| 5ZoneAirCooledConvCoef | −10.4% | +0.2% | −10.1% | 10.3 年 | −0.5% |
+| 5ZoneAirCooledDemandLimiting | −2.8% | −2.6% | −5.4% | 45.8 年 | −0.5% |
+| HVACTemplate-5ZoneVAVFanPowered | −10.5% | −1.7% | −11.8% | 7.9 年 | −0.2% |
+| HVACTemplate-5ZoneBaseboardHeat | −18.9% | +0.2% | −18.6% | 11.0 年 | −0.3% |
 
 ## 三個結論
 
 1. **照明是主力,回收期約 8–9 年**(DemandLimiting 例外,55.6 年,因為模型白天本來就會壓低照明)。
-2. **貼膜在 Chicago 氣候大多不划算**:省下的冷房電被暖房多燒的天然氣抵掉,回收期 7–27 年,Baseboard 甚至 259 年。
-3. **電價是關鍵變數**:電價從 4.5 漲到 8 TWD/kWh,組合措施回收期大約砍半(例如 5ZoneAirCooled 9.6 → 5.3 年)。
+2. **貼膜在 Chicago 氣候大多不划算**:省下的冷房電被暖房多燒的天然氣抵掉,回收期 7–30 年,Baseboard 甚至 396 年。
+3. **電價是關鍵變數**:電價從 4.5 漲到 8 TWD/kWh,組合措施回收期大約砍半(例如 5ZoneAirCooled 9.8 → 5.3 年)。
+
+貼膜的作法:從基準模擬的報表讀出原窗的 U 值、SHGC、可見光穿透率,貼膜後 SHGC 降到 0.30、U 值維持原窗;
+原窗 SHGC 已經 ≤ 0.35 就不貼(效果有限),組合也跟著不做。舊版固定 U = 3.0,會把好窗換成差窗。
 
 ## 限制
 

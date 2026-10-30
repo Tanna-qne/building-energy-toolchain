@@ -8,6 +8,7 @@
 版本升級用 E+ 自帶的 Transition 程式(MCP 沒有這個工具), 其餘修改與模擬都走 MCP。
 """
 import hashlib
+import json
 import re
 import shutil
 import subprocess
@@ -109,10 +110,13 @@ def main():
     OUT.mkdir(parents=True, exist_ok=True)
     client = Mcp()
     try:
-        models, display = [], {}
+        models, display, meta = [], {}, {}
         for src in srcs:
             name = safe_name(src.stem)
             display[name] = src.stem
+            params = src.with_suffix(".json")  # build_idf.py 會把建模參數放在 IDF 旁邊, 報告用來描述建築
+            if params.exists():
+                meta[src.stem] = json.loads(params.read_text(encoding="utf-8"))
             print(f"準備 {src.name}" + (f" (工作檔名 {name})" if name != src.stem else ""), flush=True)
             try:
                 models.append((name, prepare(client, src, name)))
@@ -123,7 +127,7 @@ def main():
     rows = scan_parallel(models, WORK)
     for r in rows:
         r["model"] = display.get(r["model"], r["model"])
-    write_outputs(rows, OUT)
+    write_outputs(rows, OUT, meta)
 
 
 if __name__ == "__main__":

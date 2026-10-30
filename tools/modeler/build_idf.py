@@ -1,15 +1,14 @@
-"""輸入幾個數字 -> 建好 EnergyPlus 模型 -> 交給 db_import.py 跑基準與全部措施。
+"""參數 JSON -> 建好 EnergyPlus 模型(IDF, 放進 db_models/inbox/)。
 
-用法(要用 tools/modeler 自己的 venv, 裡面有 OpenStudio 與 Ladybug Tools):
+平常用根目錄的 run_building.py, 它會呼叫這支再接著跑模擬。單獨用(只建模):
     tools/modeler/.venv/Scripts/python.exe tools/modeler/build_idf.py tools/modeler/example.json
-    ... --no-run      只產生 IDF, 不跑模擬
 
 建模全部交給現成套件: dragonfly(量體) + honeybee-energy(DOE 用途負載、構造、空調樣板)
 + honeybee-openstudio(轉 OpenStudio -> IDF)。這裡只負責把參數接起來。
+不要從這支直接啟動 db_import: 由這個 venv 的 Python 帶起的 E+ Transition 程式會當掉。
 """
 import json
 import os
-import subprocess
 import sys
 from pathlib import Path
 
@@ -39,7 +38,6 @@ for stream in (sys.stdout, sys.stderr):
 
 EP = Path(r"C:/Users/kiri/AppData/Local/Programs/EnergyPlusV26-2-0/EnergyPlus-26.2.0-4bd7a1f26f-Windows-x86_64")
 EPW = EP / "WeatherData" / "USA_IL_Chicago-OHare.Intl.AP.725300_TMY3.epw"  # 同 batch_driver.WEATHER
-DSH_PY = Path(r"C:/Users/kiri/.dsh/dsh-runtimes/dsh-primary-runtime/dependencies/python/python.exe")
 INBOX = WS / "db_models" / "inbox"
 HVAC_TYPES = {t: cls for cls in (VAV, PSZ, PTAC) for t in cls.EQUIPMENT_TYPES}
 
@@ -107,10 +105,9 @@ def build(p):
 
 
 def main():
-    args = [a for a in sys.argv[1:] if not a.startswith("--")]
-    if len(args) != 1:
+    if len(sys.argv) != 2:
         raise SystemExit(__doc__)
-    p = {**DEFAULTS, **json.loads(Path(args[0]).read_text(encoding="utf-8"))}
+    p = {**DEFAULTS, **json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))}
     for k in ("name", "width", "depth"):
         if k not in p:
             raise SystemExit(f"參數檔缺少 {k}")
@@ -122,12 +119,10 @@ def main():
     INBOX.mkdir(parents=True, exist_ok=True)
     out = INBOX / f"{p['name']}.idf"
     workspace.save(openstudio.path(str(out)), True)
+    out.with_suffix(".json").write_text(json.dumps(p, ensure_ascii=False, indent=2), encoding="utf-8")
     floor = sum(r.floor_area * r.multiplier for r in hb_model.rooms)
     print(f"已產生 {out}(OpenStudio {openstudio.openStudioVersion()} / E+ {openstudio.energyPlusVersion()},"
           f" {len(hb_model.rooms)} 個 zone, 樓地板 {floor:.0f} m²)")
-
-    if "--no-run" not in sys.argv:
-        subprocess.run([str(DSH_PY), str(WS / "db_import.py"), str(out)], check=True)
 
 
 if __name__ == "__main__":

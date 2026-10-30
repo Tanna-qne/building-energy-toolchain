@@ -6,6 +6,7 @@ import csv
 import json
 import os
 import queue
+import re
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -14,6 +15,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from batch_driver import Mcp, meter_kwh, sim_args, MODELS as MODELS_DIR  # noqa: E402
 from scan.scan import lighting_scaled_updates, parse  # noqa: E402
+from building_report import write_html  # noqa: E402
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -33,6 +35,42 @@ COSTS = {
     "film_twd_per_m2_glass": 1200,  # 貼膜含施工, 假設值
     "lighting_twd_per_m2_floor": 600,  # 燈具更新含施工, 假設值
 }
+
+FILM_SHGC = 0.30       # 貼膜後的 SHGC
+FILM_SKIP_SHGC = 0.35  # 原窗 SHGC 已經不高於這個值就不貼, 效果有限
+
+
+def glazing(output_dir: Path):
+    """從 E+ 報表的 Exterior Fenestration 取外窗面積加權的 (U, SHGC, 可見光穿透率); 沒有外窗回傳 None。"""
+    table = next(output_dir.glob("*Table.htm"), None)
+    if not table:
+        return None
+    text = table.read_text(encoding="latin-1")
+    i = text.find("<b>Exterior Fenestration</b>")
+    if i < 0:
+        return None
+    block = text[i:text.find("</table>", i)]
+    rows = [[re.sub(r"<[^>]+>", "", c).strip() for c in re.findall(r"<td[^>]*>(.*?)</td>", r, re.S)]
+            for r in re.findall(r"<tr>(.*?)</tr>", block, re.S)]
+    head = rows[0]
+    total = next((r for r in rows[1:] if r and r[0] == "Total or Average"), None)
+    try:
+        u, shgc, vt = (float(total[head.index(k)]) for k in
+                       ("Glass U-Factor [W/m2-K]", "Glass SHGC", "Glass Visible Transmittance"))
+    except (TypeError, ValueError):
+        return None
+    return u, shgc, vt
+
+
+def film_args(glz):
+    """貼膜只降 SHGC, U 值沿用原窗: 工具會把外窗整個換成簡化玻璃, 固定 U 會把好窗換成差窗。
+    回傳 (參數, 不貼的原因)。"""
+    if glz is None:
+        return None, "讀不到外窗資料(模型可能沒有外窗)"
+    u, shgc, vt = glz
+    if shgc <= FILM_SKIP_SHGC:
+        return None, f"原本的玻璃已經能擋大部分日射(SHGC {shgc:.2f}),貼膜幫助不大"
+    return {"u_value": round(u, 3), "shgc": FILM_SHGC, "visible_transmittance": round(min(vt, 0.55), 3)}, ""
 
 
 def run(client, idf: Path):
@@ -119,7 +157,12 @@ def scan_models(client, models, models_dir: Path):
         base = run(client, src)
         floor, glass = areas(Path(base["out_dir"])) if base["out_dir"] else (None, None)
 
-        film_args = {"u_value": 3.0, "shgc": 0.30, "visible_transmittance": 0.55}
+        glz = glazing(Path(base["out_dir"])) if base["out_dir"] else None
+        fargs, film_skip = film_args(glz)
+        notes = {}
+        if fargs:
+            notes["film_shgc0.30"] = notes["lights+film"] = \
+                f"原窗 SHGC {glz[1]:.2f} → 貼膜後 {FILM_SHGC:.2f}(U 值維持 {glz[0]:.2f})"
 
         # 單一措施: 照明 -30%
         try:
@@ -132,14 +175,15 @@ def scan_models(client, models, models_dir: Path):
         lit = run(client, lit_path) if lit_path else failed("照明修改失敗")
 
         # 單一措施: 貼膜
-        film_path = apply(client, "add_window_film_outside", {"idf_path": str(src), **film_args},
-                          models_dir / f"{name}__film.idf")
-        film = run(client, film_path) if film_path else failed("貼膜修改失敗")
+        film_path = apply(client, "add_window_film_outside", {"idf_path": str(src), **fargs},
+                          models_dir / f"{name}__film.idf") if fargs else None
+        film = run(client, film_path) if film_path else failed(film_skip or "貼膜修改失敗")
 
-        # 組合: 照明 + 貼膜 (在照明成果上再貼膜); 照明失敗就不做, 免得「組合」其實只有貼膜
-        combo_path = apply(client, "add_window_film_outside", {"idf_path": str(lit_path), **film_args},
-                           models_dir / f"{name}__combo.idf") if lit_path else None
-        combo = run(client, combo_path) if combo_path else failed("照明或貼膜修改失敗, 無法組合")
+        # 組合: 照明 + 貼膜 (在照明成果上再貼膜); 任一個做不了就不組合, 免得「組合」其實只有一項
+        combo_path = apply(client, "add_window_film_outside", {"idf_path": str(lit_path), **fargs},
+                           models_dir / f"{name}__combo.idf") if (lit_path and fargs) else None
+        combo = run(client, combo_path) if combo_path else failed(
+            f"不做組合:{film_skip}" if film_skip else "照明或貼膜修改失敗, 無法組合")
 
         # 單一措施: 滲風 x0.5 (沒有成本假設, 只看省多少, 不算回收期)
         infil_path = apply(client, "change_infiltration_by_mult", {"idf_path": str(src), "mult": 0.5},
@@ -178,7 +222,7 @@ def scan_models(client, models, models_dir: Path):
                 "payback_years": round(capex_val / saving_twd, 1)
                 if (saving_twd and saving_twd > 0 and capex_val) else None,
                 "seconds": res["seconds"],
-                "error": res["error"],
+                "error": res["error"] or notes.get(label, ""),
                 "floor_m2": floor,
                 "glass_m2": glass,
                 "eui_kwh_m2": round(total / floor, 1) if (total is not None and floor) else None,
@@ -221,8 +265,8 @@ def scan_parallel(models, models_dir: Path, workers: int = min(4, os.cpu_count()
     return [r for rows in results for r in rows]
 
 
-def write_outputs(rows, out_dir: Path):
-    """寫出 results.csv 與 report.md。"""
+def write_outputs(rows, out_dir: Path, meta=None):
+    """寫出 results.csv、report.md 與給一般人看的 report.html。meta: {模型名: 建模參數}。"""
     if not rows:
         raise SystemExit("沒有任何結果可寫出")
     with open(out_dir / "results.csv", "w", newline="", encoding="utf-8-sig") as f:
@@ -242,6 +286,7 @@ def write_outputs(rows, out_dir: Path):
                      f"{r['saving_twd'] or ''} | {r['capex_twd'] or ''} | {r['payback_years'] or ''} | {r['error']} |")
     (out_dir / "report.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
     print("\n".join(lines))
+    print(f"\n網頁報告: {write_html(rows, out_dir / 'report.html', COSTS, meta)}")
 
 
 def main():
