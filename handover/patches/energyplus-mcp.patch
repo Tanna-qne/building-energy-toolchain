@@ -1,8 +1,8 @@
 diff --git a/energyplus-mcp-server/energyplus_mcp_server/config.py b/energyplus-mcp-server/energyplus_mcp_server/config.py
-index f57459f..04332a9 100644
+index f57459f..54734b3 100644
 --- a/energyplus-mcp-server/energyplus_mcp_server/config.py
 +++ b/energyplus-mcp-server/energyplus_mcp_server/config.py
-@@ -41,10 +41,12 @@ class EnergyPlusConfig:
+@@ -41,15 +41,23 @@ class EnergyPlusConfig:
  @dataclass
  class PathConfig:
      """Path configuration"""
@@ -18,7 +18,18 @@ index f57459f..04332a9 100644
      
      def __post_init__(self):
          """Set default paths after initialization"""
-@@ -175,9 +177,10 @@ class Config:
+         if not self.sample_files_path:
+             self.sample_files_path = os.path.join(self.workspace_root, "sample_files")
++        # 用到時才會 makedirs, 但 get_server_status 會檢查它存在與否; 先建好避免誤報。
++        # 建不了(權限)也不能讓 server 起不來
++        try:
++            os.makedirs(self.temp_dir, exist_ok=True)
++        except OSError:
++            pass
+ 
+ 
+ @dataclass
+@@ -175,9 +183,10 @@ class Config:
              self.energyplus.idd_path = ep_idd_path
              # Derive installation path from IDD path
              self.energyplus.installation_path = os.path.dirname(ep_idd_path)
@@ -31,7 +42,7 @@ index f57459f..04332a9 100644
              )
              # Set weather data path
              self.energyplus.weather_data_path = os.path.join(
-@@ -189,10 +192,18 @@ class Config:
+@@ -189,10 +198,18 @@ class Config:
              )
          else:
              # Default paths
@@ -52,3 +63,24 @@ index f57459f..04332a9 100644
              # Set weather data path
              self.energyplus.weather_data_path = os.path.join(default_installation, "WeatherData")
              # Set example files path
+@@ -200,10 +217,19 @@ class Config:
+         
+         # Set default weather file
+         self.energyplus.default_weather_file = os.path.join(
+-            self.energyplus.weather_data_path, 
++            self.energyplus.weather_data_path,
+             "USA_CA_San.Francisco.Intl.AP.724940_TMY3.epw"
+         )
+ 
++        # 版本號從 IDD 第一行讀(!IDD_Version 26.2.0), 預設值 26.1.0 不會跟著本機安裝變
++        try:
++            with open(self.energyplus.idd_path, encoding="latin-1") as f:
++                first = f.readline()
++            if first.startswith("!IDD_Version"):
++                self.energyplus.version = first.split()[1]
++        except OSError:
++            pass
++
+     def _setup_logging(self):
+         """Configure logging based on configuration"""
+         log_level = getattr(logging, self.server.log_level.upper(), logging.INFO)
