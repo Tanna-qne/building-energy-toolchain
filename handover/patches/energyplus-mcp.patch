@@ -85,6 +85,29 @@ index f57459f..7ca40f5 100644
      def _setup_logging(self):
          """Configure logging based on configuration"""
          log_level = getattr(logging, self.server.log_level.upper(), logging.INFO)
+diff --git a/energyplus-mcp-server/energyplus_mcp_server/energyplus_tools.py b/energyplus-mcp-server/energyplus_mcp_server/energyplus_tools.py
+index f7fafc5..8c885a6 100644
+--- a/energyplus-mcp-server/energyplus_mcp_server/energyplus_tools.py
++++ b/energyplus-mcp-server/energyplus_mcp_server/energyplus_tools.py
+@@ -2389,7 +2389,8 @@ class EnergyPlusManager:
+                 path_obj = Path(resolved_path)
+                 output_path = str(path_obj.parent / f"{path_obj.stem}_modified{path_obj.suffix}")
+             
+-            all_surfs = idf.idfobjects['BuildingSurface:Detailed']
++            # 要複製: idfobjects[...] 是模型本身的物件清單, 直接 extend 會把別類物件塞進去, 存檔後名稱重複(Severe)
++            all_surfs = list(idf.idfobjects['BuildingSurface:Detailed'])
+             if location.casefold() == "wall":
+                 all_surfs.extend(idf.idfobjects['Wall:Detailed'])
+             elif location.casefold() == "roof":
+@@ -2405,7 +2406,7 @@ class EnergyPlusManager:
+             construction_names = set([x.Construction_Name for x in ext_surfs])
+             constructions = [x for x in idf.idfobjects["Construction"] if x.Name in construction_names]
+             ext_layer_names = set([x.Outside_Layer for x in constructions])
+-            materials = idf.idfobjects['Material']
++            materials = list(idf.idfobjects['Material'])
+             materials.extend(idf.idfobjects['Material:NoMass'])
+             ext_layers = [x for x in materials if x.Name in ext_layer_names]
+             logger.debug(f"Found {len(ext_layers)} exterior layers for {location} surfaces: {ext_surf_names}")
 diff --git a/energyplus-mcp-server/energyplus_mcp_server/server.py b/energyplus-mcp-server/energyplus_mcp_server/server.py
 index ce3a627..672c913 100644
 --- a/energyplus-mcp-server/energyplus_mcp_server/server.py

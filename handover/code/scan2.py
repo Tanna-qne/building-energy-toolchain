@@ -34,7 +34,10 @@ COSTS = {
     "gas_twd_per_kwh": 1.5,        # 天然氣約 16 TWD/m³ ÷ 10.5 kWh/m³, 假設值
     "film_twd_per_m2_glass": 1200,  # 貼膜含施工, 假設值
     "lighting_twd_per_m2_floor": 600,  # 燈具更新含施工, 假設值
+    "coolroof_twd_per_m2_roof": 350,   # 屋頂反射塗料含施工, 假設值
 }
+COOLROOF_SOLAR_ABS = 0.3  # 反射塗料後屋頂外層的日射吸收率(一般深色屋頂約 0.7)
+EQUIP_FACTOR = 0.8        # 節能設備: 插座 / 設備用電功率 ×0.8
 
 IDEAL_COOL_COP = 3.0   # 理想負載換算: 冷氣(電)的 COP, 假設值
 IDEAL_HEAT_EFF = 0.85  # 理想負載換算: 暖氣與熱水用瓦斯鍋爐的效率, 假設值
@@ -81,6 +84,64 @@ def glazing_from_eio(output_dir: Path):
     return tuple(round(sum(v[k] for v in vals) / len(vals), 3) for k in range(3))
 
 
+def roof_area(output_dir: Path):
+    """報表的 Gross Roof Area(m²);DesignBuilder 的報表是英制 ft², 換算成 m²。"""
+    table = next(output_dir.glob("*Table.htm"), None)
+    if not table:
+        return None
+    m = re.search(r"Gross Roof Area \[(m2|ft2)\]</td>\s*<td[^>]*>\s*([\d.,]+)",
+                  table.read_text(encoding="latin-1"))
+    if not m:
+        return None
+    area = float(m.group(2).replace(",", ""))
+    return round(area * 0.09290304 if m.group(1) == "ft2" else area, 1)
+
+
+def coolroof(client, src: Path, out_path: Path):
+    """屋頂外層材料的日射吸收率改成 COOLROOF_SOLAR_ABS。回傳 (IDF 路徑或 None, 說明)。
+    原本已經是淺色(不高於目標值)就不做: 塗了反而變差。"""
+    out_path = out_path.resolve()
+    out_path.unlink(missing_ok=True)
+    text = client.tool("add_coating_outside", {"idf_path": str(src), "location": "roof", "solar_abs": COOLROOF_SOLAR_ABS,
+                                               "thermal_abs": 0.9, "output_path": str(out_path)}, 120)
+    data = parse(text)
+    old = [float(m["old_value"]) for m in data.get("modifications", data.get("modifications_made", []))
+           if m.get("field") == "Solar_Absorptance" and m.get("old_value") not in (None, "")]
+    if not (data.get("success") and out_path.exists() and old):
+        out_path.unlink(missing_ok=True)
+        return None, "模型沒有外露的屋頂,或屋頂材料讀不到,這項不適用"
+    avg = sum(old) / len(old)
+    if avg <= COOLROOF_SOLAR_ABS:
+        out_path.unlink(missing_ok=True)
+        return None, f"屋頂本來就是淺色(日射吸收率 {avg:.2f}),塗反射漆沒有幫助"
+    return out_path, f"屋頂日射吸收率 {avg:.2f} → {COOLROOF_SOLAR_ABS:.2f}"
+
+
+def scaled_updates(client, tool, key, idf: Path, factor, level_field):
+    """inspect_lights / inspect_electric_equipment 的結果, 依各物件的計算方式把功率 ×factor。
+    level_field: 「以總功率表示」時的 (修改用欄位名, inspect 回傳的鍵), 照明是 Lighting_Level, 設備是 Design_Level。"""
+    text = client.tool(tool, {"idf_path": str(idf.resolve())}, 120)
+    data = json.loads(text.split("\n", 1)[1])
+    mods = []
+    for obj in data.get(key, []):
+        name = obj.get("name")
+        if not name:
+            continue
+        method = (obj.get("design_level_calculation_method") or "").lower()
+        if "watt" in method and "area" in method:
+            field, raw = "Watts_per_Floor_Area", obj.get("watts_per_floor_area")
+        elif "person" in method:
+            field, raw = "Watts_per_Person", obj.get("watts_per_person")
+        else:
+            field, raw = level_field[0], obj.get(level_field[1])
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            continue
+        mods.append({"target": f"name:{name}", "field_updates": {field: round(value * factor, 2)}})
+    return mods
+
+
 def film_args(glz):
     """貼膜只降 SHGC, U 值沿用原窗: 工具會把外窗整個換成簡化玻璃, 固定 U 會把好窗換成差窗。
     回傳 (參數, 不貼的原因)。"""
@@ -112,9 +173,10 @@ def run(client, idf: Path):
             if cool or heat:
                 elec = round(elec + cool / IDEAL_COOL_COP, 1)
                 gas = round(gas + heat / IDEAL_HEAT_EFF, 1)
-                parts = [f"冷氣 {cool:,.0f} 度冷量以 COP {IDEAL_COOL_COP:g} 換成用電" if cool else "這個模型沒有開冷氣",
-                         f"暖氣與熱水 {heat:,.0f} 度熱量以鍋爐效率 {IDEAL_HEAT_EFF:.0%} 換成天然氣" if heat else "沒有暖氣"]
-                district = "空調是理想負載(DesignBuilder 的簡化空調):" + ",".join(parts)
+                # 記在 District 的可能是 DesignBuilder 的理想負載空調, 也可能只是熱水系統, 所以不說是哪一種
+                parts = [f"{cool:,.0f} 度冷量以冷氣 COP {IDEAL_COOL_COP:g} 換成用電" if cool else "",
+                         f"{heat:,.0f} 度熱量(暖氣或熱水)以瓦斯鍋爐效率 {IDEAL_HEAT_EFF:.0%} 換成天然氣" if heat else ""]
+                district = "模型有部分冷 / 熱是用「區域能源」表示,沒有實際設備:" + "、".join(p for p in parts if p)
     return {"success": bool(payload.get("success")), "elec": elec, "gas": gas, "district": district,
             "seconds": round(time.time() - started, 1), "out_dir": out_dir,
             "error": (payload.get("error") or "")[:100]}
@@ -222,15 +284,36 @@ def scan_models(client, models, models_dir: Path):
                            models_dir / f"{name}__infil.idf")
         infil = run(client, infil_path) if infil_path else failed("滲風修改失敗(模型可能沒有 infiltration 物件)")
 
+        # 單一措施: 屋頂反射塗料(冷屋頂), 改屋頂外層材料的日射吸收率
+        roof = roof_area(Path(base["out_dir"])) if base["out_dir"] else None
+        cool_path, cool_skip = coolroof(client, src, models_dir / f"{name}__coolroof.idf")
+        cool = run(client, cool_path) if cool_path else failed(cool_skip)
+        if cool_path:
+            notes["coolroof"] = cool_skip  # 這時放的是原本的吸收率說明
+
+        # 單一措施: 節能設備(沒有成本假設, 設備汰換時順便選節能款, 只看省多少)
+        try:
+            emods = scaled_updates(client, "inspect_electric_equipment", "electric_equipment_objects", src,
+                                   EQUIP_FACTOR, ("Design_Level", "design_level"))
+        except Exception as e:
+            print(f"  inspect_electric_equipment 失敗: {e}", flush=True)
+            emods = []
+        equip_path = apply(client, "modify_electric_equipment", {"idf_path": str(src), "modifications": emods},
+                           models_dir / f"{name}__equip.idf") if emods else None
+        equip = run(client, equip_path) if equip_path else failed(
+            "模型沒有一般用電設備物件(ElectricEquipment),這項不適用" if not emods else "設備修改失敗")
+
         capex = {
             "lights": (floor or 0) * COSTS["lighting_twd_per_m2_floor"],
             "film": (glass or 0) * COSTS["film_twd_per_m2_glass"],
+            "coolroof": (roof or 0) * COSTS["coolroof_twd_per_m2_roof"],
         }
         capex["combo"] = capex["lights"] + capex["film"]
 
         for label, res, key in [("baseline", base, None), ("lights_-30%", lit, "lights"),
                                 ("film_shgc0.30", film, "film"), ("lights+film", combo, "combo"),
-                                ("infil_x0.5", infil, None)]:
+                                ("infil_x0.5", infil, None), ("coolroof", cool, "coolroof"),
+                                ("equip_-20%", equip, None)]:
             # 省電與省氣分開算: 照明/貼膜常會讓暖房的天然氣變多, 只看電會高估效益
             ok = base["elec"] is not None and res["elec"] is not None
             total = res["elec"] + res["gas"] if res["elec"] is not None else None
@@ -308,7 +391,8 @@ def write_outputs(rows, out_dir: Path, meta=None):
 
     lines = ["# 措施組合與回收期", "",
              f"- 電價假設: {COSTS['price_twd_per_kwh']} TWD/kWh; 天然氣: {COSTS['gas_twd_per_kwh']} TWD/kWh",
-             f"- 貼膜: {COSTS['film_twd_per_m2_glass']} TWD/m² 玻璃; 照明: {COSTS['lighting_twd_per_m2_floor']} TWD/m² 樓地板(有照明的 Zone)",
+             f"- 貼膜: {COSTS['film_twd_per_m2_glass']} TWD/m² 玻璃; 照明: {COSTS['lighting_twd_per_m2_floor']} TWD/m² 樓地板(有照明的 Zone); "
+             f"屋頂反射漆: {COSTS['coolroof_twd_per_m2_roof']} TWD/m² 屋頂",
              "- 年省 % 以總能源(電 + 天然氣)計",
              "", "| 模型 | 情境 | 用電 kWh | 天然氣 kWh | EUI kWh/m² | 年省 % | 年省 TWD | 投資 TWD | 回收年 | 備註 |",
              "|---|---|---|---|---|---|---|---|---|---|"]

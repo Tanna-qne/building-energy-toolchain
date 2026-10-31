@@ -255,7 +255,7 @@ Pages 狀態 `built`,已實測回 200。
 | `db_import.py` | DB 匯出的 IDF → 升版 → 補電表 → `scan_parallel()`(§4.2) |
 | `run_building.py` | **一般人用的入口**:`python run_building.py 參數.json` → 呼叫 `build_idf.py` 建模 → `db_import` 跑全部措施 → `db_models/out/report.html` |
 | `tools/modeler/build_idf.py` | 參數 JSON(尺寸 / 樓層 / 窗牆比 / 用途 / 空調)→ Ladybug Tools + OpenStudio 建模 → IDF(放進 `db_models/inbox/`,參數另存同名 `.json`)。用自己的 venv(`tools/modeler/.venv`) |
-| `tests/smoke.py` | 端到端檢查,7 項:建模(長方形 / L 形、VAV / PSZ / PTAC)、錯誤提示、DB 匯入升級與中文檔名、scan2 + 敏感度、批量、eppy patch。已知數字(EUI 146.9、43,510.1 / 19,018.4 kWh)當回歸基準。範例檔在 `tests/fixtures/` |
+| `tests/smoke.py` | 端到端檢查,7 項:建模(長方形 / L 形、VAV / PSZ / PTAC)、錯誤提示、DB 匯入升級與中文檔名、scan2 + 敏感度、批量、eppy patch。已知數字(辦公大樓 EUI 150.5、範例 43,510.1 / 19,018.4 kWh)當回歸基準。範例檔在 `tests/fixtures/` |
 | `building_report.py` | 把結果寫成白話網頁:一句結論、一年能源與費用、每個措施省多少錢的長條圖、「值得考慮 / 看情況 / 不太划算」判讀。`scan2.write_outputs()` 自動呼叫 |
 | `sensitivity.py` | 電價/成本敏感度 → 產生 `report/index.html` 與 `sensitivity.csv` |
 | `db-energy-case/dbcase.py` | 早期的獨立分析工具:讀 `eplusout.csv`/`eplusmtr.csv` 算 EUI 與分項(不經 MCP);已被 `db_import.py` 取代 |
@@ -312,6 +312,8 @@ Pages 狀態 `built`,已實測回 200。
 6. **報告自動化**:目前 `sensitivity.py` 手動跑,可考慮 CI(GitHub Actions)自動重建 Pages。
 7. **`db_import.py` 加 `--weather`**:目前氣象檔寫死 Chicago(`batch_driver.WEATHER`)。
 8. **清理**:`scan/scan.py`、`db-energy-case/dbcase.py` 已被取代,確認後可刪。
+9. **加強隔熱、高效率冷氣兩種措施**:MCP 沒有改材料厚度 / 導熱係數,也沒有改空調 COP 的工具
+   (`get_materials` 只能讀;設備工具只有照明、人員、插座)。要做得找現成工具(例如 honeybee 的構造庫)或在 MCP 加工具。
 
 ---
 
@@ -447,13 +449,16 @@ handover/
 - `scan2` 加入滲風措施,一次跑完全部措施。
 - 移除 git 全域代理設定(前任留下的本機代理已停用)。
 - `tools/modeler/build_idf.py`:不用 DB,輸入參數就建模(Ladybug Tools + OpenStudio 3.11,方形 / L 形)。
-  實測 3 層 40×25 m 辦公(VAV + 冰水主機 + 鍋爐):EUI 146.9 kWh/m²,5 個情境約 1 分鐘。
+  實測 3 層 40×25 m 辦公(VAV + 冰水主機 + 鍋爐):EUI 146.9 kWh/m²(之後把熱水算進去變 150.5),5 個情境約 1 分鐘。
 - 整個工具鏈放到 private repo `Tanna-qne/building-energy-toolchain`(`report/` 與 `vendor/` 不在裡面)。
 - `run_building.py` + `building_report.py`:一個指令從參數到白話網頁報告。
 - 貼膜改成依原窗調整(只降 SHGC、U 值不變;原窗已能遮陽就不貼)。範例辦公大樓從「多耗 7.7%」變成「省 0.8%」。
 - `batch_driver.sim_args()`:只在需要時才跑 ExpandObjects。
 - `tests/smoke.py`:端到端檢查,2026-10-30 全部通過(約 20 分鐘);10-31 加入 DesignBuilder 實際匯出檔的項目。
 - DesignBuilder 匯出檔跑通:窗戶性質改讀 `.eio`(DB 報表是英制)、理想負載換算成電與天然氣。
+- 新增兩種措施:屋頂反射漆(`add_coating_outside`,原本已淺色就不做)、節能設備 −20%(`modify_electric_equipment`)。
+- 修上游 MCP bug:`add_coating_outside` 直接 extend `idf.idfobjects[...]`,把 Material:NoMass 重複寫進模型(Severe)。
+- 區域供冷 / 供熱一律換算(包含 honeybee 模型的熱水),辦公大樓 EUI 146.9 → 150.5。
 - MCP `config.py`:版本號從 IDD 讀(原本寫死 26.1.0);temp 資料夾改到 repo 內的 `temp/`(`%TEMP%` 底下在 DSH 與 sandbox 都建不了)。
 - DSH:`cordis.patch.yml` 的四個 MCP 改寫在 `insert:` 底下(DSH 端完成),對話內 46 個 MCP 工具都已載入。
 

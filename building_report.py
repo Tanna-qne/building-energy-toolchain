@@ -12,12 +12,16 @@ MEASURES = {  # 結果裡的代號 -> 白話名稱與一句話說明
     "film_shgc0.30": ("外窗貼隔熱膜", "在玻璃外側貼膜,擋掉一部分太陽熱;夏天冷氣省,冬天暖氣可能多用一點。"),
     "lights+film": ("燈具和貼膜一起做", "上面兩項同時做的效果。"),
     "infil_x0.5": ("加強門窗氣密", "把從縫隙漏進來的外氣減半,例如換氣密條、修門窗。"),
+    "coolroof": ("屋頂塗反射漆", "在屋頂塗淺色反射塗料(冷屋頂),少吸太陽熱;夏天頂樓比較不熱,冬天暖氣可能多用一點。"),
+    "equip_-20%": ("換節能設備", "電腦、影印機等插座用電減少 20%,例如汰換時選節能標章產品。"),
 }
 GOOD_YEARS, OK_YEARS = 8, 15  # 回本年數的判讀門檻
 GAS_UP_WHY = {  # 省電卻多用天然氣時的白話原因
     "lights_-30%": "(燈具發的熱變少,冬天要靠暖氣補回來)",
     "film_shgc0.30": "(冬天照進來的太陽熱也被擋掉,暖氣要多開)",
     "lights+film": "(燈具發的熱和照進來的太陽熱都變少,冬天要靠暖氣補回來)",
+    "coolroof": "(屋頂冬天也少吸太陽熱,暖氣要多開)",
+    "equip_-20%": "(設備發的熱變少,冬天要靠暖氣補回來)",
 }
 BUILDING_NAMES = {
     "SmallOffice": "小型辦公", "MediumOffice": "中型辦公", "LargeOffice": "大型辦公", "Retail": "零售賣場",
@@ -225,7 +229,9 @@ h1{{font-size:24px;margin:0 0 4px}} h2{{font-size:20px;margin:36px 0 6px}} h3{{f
 <ul class="notes">
 <li>用電腦模擬這棟建築一整年每小時的用電與用氣(EnergyPlus),再分別套用每個措施重算一次,比較差多少。</li>
 <li>價格假設:電 {costs["price_twd_per_kwh"]:g} 元/度、天然氣 {costs["gas_twd_per_kwh"]:g} 元/度;
- 貼膜 {costs["film_twd_per_m2_glass"]:,} 元/m² 玻璃、換燈具 {costs["lighting_twd_per_m2_floor"]:,} 元/m² 樓地板。都是估計值,不是報價。</li>
+ 貼膜 {costs["film_twd_per_m2_glass"]:,} 元/m² 玻璃、換燈具 {costs["lighting_twd_per_m2_floor"]:,} 元/m² 樓地板、
+ 屋頂反射漆 {costs.get("coolroof_twd_per_m2_roof", 0):,} 元/m² 屋頂。都是估計值,不是報價。
+ 氣密與節能設備沒有成本資料,只算省多少。</li>
 <li>回本年數 = 投資 ÷ 每年省的錢。沒有算利息、維修與設備壽命。
  判讀:{GOOD_YEARS} 年內「值得考慮」、{GOOD_YEARS}–{OK_YEARS} 年「看情況」、超過 {OK_YEARS} 年「不太划算」。</li>
 <li>氣象資料目前用美國芝加哥(冬天冷、要開暖氣),換成台灣城市結果會不一樣。</li>

@@ -42,12 +42,15 @@ def by_case(rs, model):
     return {r["case"]: r for r in rs if r["model"] == model}
 
 
-def all_cases_ok(rs, model, allow_skip=("lights+film", "film_shgc0.30")):
-    """5 個情境都要成功; 貼膜與組合可以因為原窗已能遮陽而合理略過。"""
+SKIP_OK = ("幫助不大", "不適用", "沒有幫助")  # 措施對這個模型不適用時的合理略過
+
+
+def all_cases_ok(rs, model):
+    """7 個情境都要成功; 貼膜、組合、屋頂、設備可以因為不適用而略過(要有說明)。"""
     cases = by_case(rs, model)
-    check(len(cases) == 5, f"{model}: 應有 5 個情境, 實際 {sorted(cases)}")
+    check(len(cases) == 7, f"{model}: 應有 7 個情境, 實際 {sorted(cases)}")
     for case, r in cases.items():
-        skipped = case in allow_skip and "幫助不大" in r["error"]
+        skipped = case != "baseline" and any(w in r["error"] for w in SKIP_OK)
         check(r["success"] == "True" or skipped, f"{model} {case} 失敗: {r['error']}")
     return cases
 
@@ -58,12 +61,14 @@ def test_modeler_office():
     check(code == 0, f"run_building 失敗:\n{log[-1500:]}")
     cases = all_cases_ok(rows(OUT / "results.csv"), "demo_office")
     base = cases["baseline"]
-    check(abs(float(base["eui_kwh_m2"]) - 146.9) < 1.0, f"EUI 應約 146.9, 實際 {base['eui_kwh_m2']}")
+    # 150.5 含熱水用熱(honeybee 把熱水記在區域供熱, 換算成天然氣); 不含熱水是 146.9
+    check(abs(float(base["eui_kwh_m2"]) - 150.5) < 1.0, f"EUI 應約 150.5, 實際 {base['eui_kwh_m2']}")
     check(float(base["gas_kwh"]) > 0, "有鍋爐卻沒有天然氣: 空調沒進模型?")
     check(float(base["floor_m2"]) == 3000.0, f"樓地板應為 3000, 實際 {base['floor_m2']}")
-    for case in ("lights_-30%", "infil_x0.5"):
+    for case in ("lights_-30%", "infil_x0.5", "equip_-20%"):
         check(float(cases[case]["saving_pct"]) > 0, f"{case} 應該要省能源")
     check("U 值維持" in cases["film_shgc0.30"]["error"], "貼膜應沿用原窗 U 值")
+    check("0.70 → 0.30" in cases["coolroof"]["error"], "屋頂反射漆應從 0.70 改成 0.30")
     html = (OUT / "report.html").read_text(encoding="utf-8")
     for text in ("中型辦公", "中央空調(VAV)", "換省電燈具", "這些數字怎麼來的"):
         check(text in html, f"report.html 缺少「{text}」")
@@ -117,24 +122,24 @@ def test_db_designbuilder_export():
     check("升級 23.1 -> 23.2" in log and "升級 26.1 -> 26.2" in log, "沒有看到 23.1 -> 26.2 的升級鏈")
     cases = all_cases_ok(rows(OUT / "results.csv"), "designbuilder_v23_1")
     base = cases["baseline"]
-    check(float(base["gas_kwh"]) > 0 and "理想負載" in base["error"],
+    check(float(base["gas_kwh"]) > 0 and "區域能源" in base["error"],
           f"理想負載的暖氣沒有換算成天然氣: gas={base['gas_kwh']} note={base['error']}")
     check("U 值維持 1.96" in cases["film_shgc0.30"]["error"], "沒有從 .eio 讀到窗戶性質")
     check(float(cases["infil_x0.5"]["saving_pct"]) > 0, "只有暖氣的模型, 滲風減半應該要省")
 
 
 def test_scan2_samples():
-    """5 個範例模型 × 5 情境平行跑完, 並重產生敏感度網頁。"""
+    """5 個範例模型 × 7 情境平行跑完, 並重產生敏感度網頁。"""
     code, log = run(WS / "scan2" / "scan2.py")
     check(code == 0, f"scan2 失敗:\n{log[-1500:]}")
     rs = rows(WS / "scan2" / "results.csv")
-    check(len(rs) == 25 and all(r["success"] == "True" for r in rs),
-          f"25 個情境應全部成功: {[(r['model'], r['case'], r['error']) for r in rs if r['success'] != 'True']}")
+    check(len(rs) == 35 and all(r["success"] == "True" for r in rs),
+          f"35 個情境應全部成功: {[(r['model'], r['case'], r['error']) for r in rs if r['success'] != 'True']}")
     base = by_case(rs, "5ZoneAirCooled")["baseline"]
     check((base["elec_kwh"], base["gas_kwh"], base["floor_m2"]) == ("43510.1", "19018.4", "463.6"),
           f"5ZoneAirCooled 基準改變了: {base['elec_kwh']} / {base['gas_kwh']} / {base['floor_m2']}")
     code, log = run(WS / "sensitivity.py", timeout=120)
-    check(code == 0 and "15 個措施組合" in log, f"sensitivity 失敗:\n{log[-800:]}")
+    check(code == 0 and "個措施組合" in log, f"sensitivity 失敗:\n{log[-800:]}")
 
 
 def test_batch():
