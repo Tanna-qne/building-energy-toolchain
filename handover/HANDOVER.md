@@ -295,6 +295,8 @@ Pages 狀態 `built`,已實測回 200。
     MCP 只回空白錯誤(看輸出目錄的 `.experr`)。`batch_driver.sim_args()` 只在有 HVACTemplate / GroundHeatTransfer 時才展開。
 16. **dragonfly 的 `set_all_room_2d_hvac` 預設 `conditioned_only=True`**,新建的 zone 會全被跳過、模型沒有空調
     (症狀:天然氣 0、只有照明措施有效果)。`build_idf.py` 已傳 `conditioned_only=False`。
+16b. **honeybee 的空調 `vintage` 不會改變設備效率**:換年代產生的 IDF 除了物件順序完全一樣(實測)。
+    高效率空調改由 `build_idf.upgrade_hvac()` 用 OpenStudio SDK 直接改 COP / 鍋爐 / 風扇效率。
 17. **Ladybug Tools 會在 `HOME` / `APPDATA` 建資料夾**,sandbox 下會 `WinError 5`;`build_idf.py` 把兩者指到 `tools/modeler/home/`。
 18. **由 `tools/modeler/.venv` 的 Python 帶起的 E+ Transition 程式會當掉**(gfortran backtrace,環境變數與 PATH 完全相同也一樣,
     在 Claude 的 sandbox 下觀察到)。所以 `run_building.py` 用主 Python 當父程序:先呼叫 venv 建模、建完結束,再自己跑 `db_import`。
@@ -312,8 +314,8 @@ Pages 狀態 `built`,已實測回 200。
 6. **報告自動化**:目前 `sensitivity.py` 手動跑,可考慮 CI(GitHub Actions)自動重建 Pages。
 7. **`db_import.py` 加 `--weather`**:目前氣象檔寫死 Chicago(`batch_driver.WEATHER`)。
 8. **清理**:`scan/scan.py`、`db-energy-case/dbcase.py` 已被取代,確認後可刪。
-9. **加強隔熱、高效率冷氣兩種措施**:MCP 沒有改材料厚度 / 導熱係數,也沒有改空調 COP 的工具
-   (`get_materials` 只能讀;設備工具只有照明、人員、插座)。要做得找現成工具(例如 honeybee 的構造庫)或在 MCP 加工具。
+9. **DesignBuilder 模型的加強隔熱 / 高效率空調**:參數模型已有(見 §15),DB 匯出的 IDF 還沒有。
+   MCP 沒有改材料厚度與空調 COP 的工具,要在 MCP 加工具(可參考 NREL BCL 的 Increase R-value / Set COP 措施)。
 
 ---
 
@@ -461,6 +463,8 @@ handover/
 - 區域供冷 / 供熱一律換算(包含 honeybee 模型的熱水),辦公大樓 EUI 146.9 → 150.5。
 - 多方案比較:`run_building.py` 可一次給多個參數檔,報告最前面並排比較(一年費用、每 m² 費用、EUI、最划算措施)。
 - 貨幣與價格集中在根目錄 `costs.json`(預設 USD);結果欄位改成 `saving_cost` / `capex_cost` / `currency`,敏感度網頁的電價改用基準的倍數。
+- 加強隔熱、高效率空調(只限參數模型):`build_idf.py` 另建變體(`<name>.variants/`),外牆與屋頂換較新 / 較冷氣候區的構造;
+  空調用 OpenStudio SDK 改效率。成本在 `costs.json` 的 `insulation_per_m2_envelope` / `hvac_per_m2_floor`。
 - MCP `config.py`:版本號從 IDD 讀(原本寫死 26.1.0);temp 資料夾改到 repo 內的 `temp/`(`%TEMP%` 底下在 DSH 與 sandbox 都建不了)。
 - DSH:`cordis.patch.yml` 的四個 MCP 改寫在 `insert:` 底下(DSH 端完成),對話內 46 個 MCP 工具都已載入。
 

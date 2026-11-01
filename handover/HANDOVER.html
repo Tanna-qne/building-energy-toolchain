@@ -239,6 +239,8 @@ cd vendor/EnergyPlus-MCP/energyplus-mcp-server
 <p>MCP 只回空白錯誤(看輸出目錄的 <code>.experr</code>)。<code>batch_driver.sim_args()</code> 只在有 HVACTemplate / GroundHeatTransfer 時才展開。</p>
 <p>16. <strong>dragonfly 的 <code>set_all_room_2d_hvac</code> 預設 <code>conditioned_only=True</code></strong>,新建的 zone 會全被跳過、模型沒有空調</p>
 <p>(症狀:天然氣 0、只有照明措施有效果)。<code>build_idf.py</code> 已傳 <code>conditioned_only=False</code>。</p>
+<p>16b. <strong>honeybee 的空調 <code>vintage</code> 不會改變設備效率</strong>:換年代產生的 IDF 除了物件順序完全一樣(實測)。</p>
+<p>高效率空調改由 <code>build_idf.upgrade_hvac()</code> 用 OpenStudio SDK 直接改 COP / 鍋爐 / 風扇效率。</p>
 <p>17. <strong>Ladybug Tools 會在 <code>HOME</code> / <code>APPDATA</code> 建資料夾</strong>,sandbox 下會 <code>WinError 5</code>;<code>build_idf.py</code> 把兩者指到 <code>tools/modeler/home/</code>。</p>
 <p>18. <strong>由 <code>tools/modeler/.venv</code> 的 Python 帶起的 E+ Transition 程式會當掉</strong>(gfortran backtrace,環境變數與 PATH 完全相同也一樣,</p>
 <p>在 Claude 的 sandbox 下觀察到)。所以 <code>run_building.py</code> 用主 Python 當父程序:先呼叫 venv 建模、建完結束,再自己跑 <code>db_import</code>。</p>
@@ -253,8 +255,8 @@ cd vendor/EnergyPlus-MCP/energyplus-mcp-server
 <p>6. <strong>報告自動化</strong>:目前 <code>sensitivity.py</code> 手動跑,可考慮 CI(GitHub Actions)自動重建 Pages。</p>
 <p>7. <strong><code>db_import.py</code> 加 <code>--weather</code></strong>:目前氣象檔寫死 Chicago(<code>batch_driver.WEATHER</code>)。</p>
 <p>8. <strong>清理</strong>:<code>scan/scan.py</code>、<code>db-energy-case/dbcase.py</code> 已被取代,確認後可刪。</p>
-<p>9. <strong>加強隔熱、高效率冷氣兩種措施</strong>:MCP 沒有改材料厚度 / 導熱係數,也沒有改空調 COP 的工具</p>
-<p>(<code>get_materials</code> 只能讀;設備工具只有照明、人員、插座)。要做得找現成工具(例如 honeybee 的構造庫)或在 MCP 加工具。</p>
+<p>9. <strong>DesignBuilder 模型的加強隔熱 / 高效率空調</strong>:參數模型已有(見 §15),DB 匯出的 IDF 還沒有。</p>
+<p>MCP 沒有改材料厚度與空調 COP 的工具,要在 MCP 加工具(可參考 NREL BCL 的 Increase R-value / Set COP 措施)。</p>
 <hr>
 <h2>10. 給接手者的規矩</h2>
 <ul>
@@ -383,6 +385,10 @@ handover/
 <li>區域供冷 / 供熱一律換算(包含 honeybee 模型的熱水),辦公大樓 EUI 146.9 → 150.5。</li>
 <li>多方案比較:<code>run_building.py</code> 可一次給多個參數檔,報告最前面並排比較(一年費用、每 m² 費用、EUI、最划算措施)。</li>
 <li>貨幣與價格集中在根目錄 <code>costs.json</code>(預設 USD);結果欄位改成 <code>saving_cost</code> / <code>capex_cost</code> / <code>currency</code>,敏感度網頁的電價改用基準的倍數。</li>
+<li>加強隔熱、高效率空調(只限參數模型):<code>build_idf.py</code> 另建變體(<code>&lt;name&gt;.variants/</code>),外牆與屋頂換較新 / 較冷氣候區的構造;</li>
+</ul>
+<p>空調用 OpenStudio SDK 改效率。成本在 <code>costs.json</code> 的 <code>insulation_per_m2_envelope</code> / <code>hvac_per_m2_floor</code>。</p>
+<ul>
 <li>MCP <code>config.py</code>:版本號從 IDD 讀(原本寫死 26.1.0);temp 資料夾改到 repo 內的 <code>temp/</code>(<code>%TEMP%</code> 底下在 DSH 與 sandbox 都建不了)。</li>
 <li>DSH:<code>cordis.patch.yml</code> 的四個 MCP 改寫在 <code>insert:</code> 底下(DSH 端完成),對話內 46 個 MCP 工具都已載入。</li>
 </ul>

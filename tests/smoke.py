@@ -47,9 +47,10 @@ SKIP_OK = ("幫助不大", "不適用", "沒有幫助")  # 措施對這個模型
 
 
 def all_cases_ok(rs, model):
-    """7 個情境都要成功; 貼膜、組合、屋頂、設備可以因為不適用而略過(要有說明)。"""
+    """情境都要成功; 貼膜、組合、屋頂、設備可以因為不適用而略過(要有說明)。
+    參數建模的模型有 9 個(多加強隔熱、高效率空調), DesignBuilder 與範例模型 7 個。"""
     cases = by_case(rs, model)
-    check(len(cases) == 7, f"{model}: 應有 7 個情境, 實際 {sorted(cases)}")
+    check(len(cases) in (7, 9), f"{model}: 應有 7 或 9 個情境, 實際 {sorted(cases)}")
     for case, r in cases.items():
         skipped = case != "baseline" and any(w in r["error"] for w in SKIP_OK)
         check(r["success"] == "True" or skipped, f"{model} {case} 失敗: {r['error']}")
@@ -70,6 +71,9 @@ def test_modeler_office():
         check(float(cases[case]["saving_pct"]) > 0, f"{case} 應該要省能源")
     check("U 值維持" in cases["film_shgc0.30"]["error"], "貼膜應沿用原窗 U 值")
     check("0.70 → 0.30" in cases["coolroof"]["error"], "屋頂反射漆應從 0.70 改成 0.30")
+    for case, text in (("insulation", "外牆 U"), ("hvac_eff", "冰水主機 COP")):
+        check(case in cases and text in cases[case]["error"] and float(cases[case]["saving_pct"]) > 0,
+              f"參數模型應有「{case}」且要省能源: {cases.get(case)}")
     html = (OUT / "report.html").read_text(encoding="utf-8")
     for text in ("中型辦公", "中央空調(VAV)", "換省電燈具", "這些數字怎麼來的"):
         check(text in html, f"report.html 缺少「{text}」")

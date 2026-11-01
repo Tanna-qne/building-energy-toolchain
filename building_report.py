@@ -14,6 +14,8 @@ MEASURES = {  # 結果裡的代號 -> 白話名稱與一句話說明
     "infil_x0.5": ("加強門窗氣密", "把從縫隙漏進來的外氣減半,例如換氣密條、修門窗。"),
     "coolroof": ("屋頂塗反射漆", "在屋頂塗淺色反射塗料(冷屋頂),少吸太陽熱;夏天頂樓比較不熱,冬天暖氣可能多用一點。"),
     "equip_-20%": ("換節能設備", "電腦、影印機等插座用電減少 20%,例如汰換時選節能標章產品。"),
+    "insulation": ("加強牆與屋頂隔熱", "外牆和屋頂加厚保溫(換成較新、較嚴格的建築節能規範),冬天少漏熱、夏天少進熱。"),
+    "hvac_eff": ("換高效率空調", "同一種空調系統,換成符合最新能效標準(ASHRAE 2019)的設備,冷氣與風扇更省電。"),
 }
 GOOD_YEARS, OK_YEARS = 8, 15  # 回本年數的判讀門檻
 TAG_BEST = ' <b class="tag">✓ 最省</b>'
@@ -304,7 +306,10 @@ table.cmp th{{color:var(--ink2);font-weight:600}} table.cmp .m{{text-align:left}
 <li>用電腦模擬這棟建築一整年每小時的用電與用氣(EnergyPlus),再分別套用每個措施重算一次,比較差多少。</li>
 <li>價格假設({costs["currency"]}):電 {sym}{costs["price_per_kwh"]:g}/度、天然氣 {sym}{costs["gas_per_kwh"]:g}/度;
  貼膜 {sym}{costs["film_per_m2_glass"]:,}/m² 玻璃、換燈具 {sym}{costs["lighting_per_m2_floor"]:,}/m² 樓地板、
- 屋頂反射漆 {sym}{costs["coolroof_per_m2_roof"]:,}/m² 屋頂。都是估計值,不是報價,改 costs.json 就會換。
+ 屋頂反射漆 {sym}{costs["coolroof_per_m2_roof"]:,}/m² 屋頂、加強隔熱 {sym}{costs["insulation_per_m2_envelope"]:,}/m² 外牆加屋頂、
+ 換空調 {sym}{costs["hvac_per_m2_floor"]:,}/m² 樓地板。都是估計值,不是報價,改 costs.json 就會換。</li>
+<li>「換高效率空調」的投資是整套更換的費用,所以回本很久。實務上多半是設備到了汰換年限才換,
+ 這時只需要算「高效率款比一般款貴多少」,回本會快很多。
  氣密與節能設備沒有成本資料,只算省多少。</li>
 <li>回本年數 = 投資 ÷ 每年省的錢。沒有算利息、維修與設備壽命。
  判讀:{GOOD_YEARS} 年內「值得考慮」、{GOOD_YEARS}–{OK_YEARS} 年「看情況」、超過 {OK_YEARS} 年「不太划算」。</li>

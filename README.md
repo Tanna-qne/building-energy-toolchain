@@ -1,7 +1,8 @@
 # 建築能耗模擬工具鏈
 
 輸入幾個建築參數(尺寸、樓層、窗牆比、用途、空調系統),自動建好 EnergyPlus 模型,
-跑基準與 6 種節能措施(換省電燈具、外窗貼隔熱膜、燈具 + 貼膜、加強氣密、屋頂反射漆、換節能設備),
+跑基準與 8 種節能措施(換省電燈具、外窗貼隔熱膜、燈具 + 貼膜、加強氣密、屋頂反射漆、換節能設備、
+加強牆與屋頂隔熱、換高效率空調),
 算出省能、省錢與回收期。
 不需要會 DesignBuilder 或 EnergyPlus。
 
@@ -55,7 +56,7 @@
 | `climate_zone` | ASHRAE 氣候區,決定牆、屋頂、窗的構造 | 1–8;目前氣象檔是 Chicago(5) |
 | `construction` | 構造型式 | `SteelFramed`、`WoodFramed`、`Mass`、`Metal Building` |
 | `hvac` | 空調系統 | `VAV_Chiller_Boiler`、`PSZAC_GasCoil`、`PTAC_ElectricBaseboard` 等 |
-| `vintage` | 空調效率依據的年份 | `ASHRAE_2019`(預設)、`DOE_Ref_1980_2004` |
+| `construction_vintage` | 牆、屋頂、窗構造的年代;舊建築改造填舊的 | `2019`(預設)、`1980_2004`、`pre_1980` |
 
 ## 貨幣與價格(`costs.json`)
 
@@ -63,12 +64,13 @@
 
 ```json
 {"currency": "USD", "symbol": "US$", "price_per_kwh": 0.13, "gas_per_kwh": 0.04,
- "film_per_m2_glass": 40, "lighting_per_m2_floor": 20, "coolroof_per_m2_roof": 12}
+ "film_per_m2_glass": 40, "lighting_per_m2_floor": 20, "coolroof_per_m2_roof": 12,
+ "insulation_per_m2_envelope": 45, "hvac_per_m2_floor": 90}
 ```
 
 都是假設值。換成客戶當地的價格或其他貨幣,直接改這個檔再重跑;例如新台幣大約是
 `"currency": "TWD", "symbol": "NT$", "price_per_kwh": 4.5, "gas_per_kwh": 1.5, "film_per_m2_glass": 1200,
-"lighting_per_m2_floor": 600, "coolroof_per_m2_roof": 350`。
+"lighting_per_m2_floor": 600, "coolroof_per_m2_roof": 350, "insulation_per_m2_envelope": 1400, "hvac_per_m2_floor": 2800`。
 
 ## 也可以用 DesignBuilder 的模型
 
@@ -121,7 +123,8 @@ python tests/smoke.py
 - 氣象檔固定 Chicago;成本(電價、氣價、貼膜、燈具)是假設值,在 `scan2/scan2.py` 的 `COSTS`。
 - 照明 −30%、滲風 ×0.5、設備 −20% 是固定比例;貼膜會依原窗調整(只降 SHGC、U 值不變,原窗已經能遮陽就不貼);
   屋頂反射漆把屋頂日射吸收率改成 0.3(原本已經是淺色就不做)。
-- 還沒有「加強牆 / 屋頂隔熱」與「換高效率冷氣」:EnergyPlus-MCP 沒有改材料厚度與空調效率的工具。
+- 「加強隔熱」與「換高效率空調」只有參數建模的模型才有(DesignBuilder 匯出的沒有):
+  隔熱換成較新 / 較冷氣候區的保溫規範;空調是冰水主機與冷氣 COP ×1.25、鍋爐 95%、風扇 0.7。
 
 ## 授權
 

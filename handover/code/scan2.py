@@ -79,12 +79,12 @@ def glazing_from_eio(output_dir: Path):
     return tuple(round(sum(v[k] for v in vals) / len(vals), 3) for k in range(3))
 
 
-def roof_area(output_dir: Path):
-    """報表的 Gross Roof Area(m²);DesignBuilder 的報表是英制 ft², 換算成 m²。"""
+def roof_area(output_dir: Path, what="Roof"):
+    """報表的 Gross Roof / Wall Area(m²);DesignBuilder 的報表是英制 ft², 換算成 m²。"""
     table = next(output_dir.glob("*Table.htm"), None)
     if not table:
         return None
-    m = re.search(r"Gross Roof Area \[(m2|ft2)\]</td>\s*<td[^>]*>\s*([\d.,]+)",
+    m = re.search(rf"Gross {what} Area \[(m2|ft2)\]</td>\s*<td[^>]*>\s*([\d.,]+)",
                   table.read_text(encoding="latin-1"))
     if not m:
         return None
@@ -235,9 +235,11 @@ def areas(output_dir: Path):
 
 
 def scan_models(client, models, models_dir: Path):
-    """對 [(名稱, IDF 路徑), ...] 跑基準 + 照明 / 貼膜 / 組合, 回傳結果列。db_import.py 也用這個。"""
+    """對 [(名稱, IDF 路徑[, 變體]), ...] 跑基準 + 全部措施, 回傳結果列。db_import.py 也用這個。
+    變體: {"insulation" / "hvac_eff": (已準備好的 IDF 或 None, 說明)}, 只有 build_idf.py 建的模型才有。"""
     rows = []
-    for name, src in models:
+    for name, src, *rest in models:
+        extras = rest[0] if rest else {}
         src = Path(src).resolve()
         if not src.exists():
             print(f"跳過(找不到模型) {src}", flush=True)
@@ -298,17 +300,29 @@ def scan_models(client, models, models_dir: Path):
         equip = run(client, equip_path) if equip_path else failed(
             "模型沒有一般用電設備物件(ElectricEquipment),這項不適用" if not emods else "設備修改失敗")
 
+        # 換構造 / 換設備的措施: MCP 沒有工具, 由 build_idf.py 另建的變體模型直接模擬(見 db_import.variants)
+        var_results = []
+        for key in ("insulation", "hvac_eff"):
+            if key in extras:
+                path, note = extras[key]
+                var_results.append((key, run(client, Path(path)) if path else failed(note), key))
+                if path:
+                    notes[key] = note
+        walls = roof_area(Path(base["out_dir"]), "Wall") if base["out_dir"] else None
+
         capex = {
             "lights": (floor or 0) * COSTS["lighting_per_m2_floor"],
             "film": (glass or 0) * COSTS["film_per_m2_glass"],
             "coolroof": (roof or 0) * COSTS["coolroof_per_m2_roof"],
+            "insulation": ((walls or 0) + (roof or 0)) * COSTS["insulation_per_m2_envelope"],
+            "hvac_eff": (floor or 0) * COSTS["hvac_per_m2_floor"],
         }
         capex["combo"] = capex["lights"] + capex["film"]
 
         for label, res, key in [("baseline", base, None), ("lights_-30%", lit, "lights"),
                                 ("film_shgc0.30", film, "film"), ("lights+film", combo, "combo"),
                                 ("infil_x0.5", infil, None), ("coolroof", cool, "coolroof"),
-                                ("equip_-20%", equip, None)]:
+                                ("equip_-20%", equip, None), *var_results]:
             # 省電與省氣分開算: 照明/貼膜常會讓暖房的天然氣變多, 只看電會高估效益
             ok = base["elec"] is not None and res["elec"] is not None
             total = res["elec"] + res["gas"] if res["elec"] is not None else None

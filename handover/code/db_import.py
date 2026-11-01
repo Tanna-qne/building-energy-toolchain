@@ -101,6 +101,23 @@ def prepare(client, src: Path, name: str):
     return step or work
 
 
+def variants(client, src: Path, name: str):
+    """build_idf.py 另外建好的「加強隔熱 / 高效率空調」變體模型(<name>.variants/variants.json)。
+    回傳 {措施: (準備好的 IDF 或 None, 說明)}; DesignBuilder 匯出的模型沒有變體, 回傳 {}。"""
+    vdir = src.parent / f"{src.stem}.variants"
+    info = vdir / "variants.json"
+    if not info.exists():
+        return {}
+    out = {}
+    for key, v in json.loads(info.read_text(encoding="utf-8")).items():
+        if v.get("file"):
+            print(f"  準備變體 {key}", flush=True)
+            out[key] = (prepare(client, vdir / v["file"], f"{name}__{key}_v"), v.get("note", ""))
+        else:
+            out[key] = (None, v.get("skip", ""))
+    return out
+
+
 def main():
     args = [Path(a) for a in sys.argv[1:]] or [INBOX]
     srcs = []
@@ -121,7 +138,7 @@ def main():
                 meta[src.stem] = json.loads(params.read_text(encoding="utf-8"))
             print(f"準備 {src.name}" + (f" (工作檔名 {name})" if name != src.stem else ""), flush=True)
             try:
-                models.append((name, prepare(client, src, name)))
+                models.append((name, prepare(client, src, name), variants(client, src, name)))
             except (RuntimeError, ValueError, OSError) as e:
                 print(f"  跳過: {e}", flush=True)
     finally:

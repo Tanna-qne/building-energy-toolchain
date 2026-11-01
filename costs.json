@@ -5,5 +5,7 @@
   "gas_per_kwh": 0.04,
   "film_per_m2_glass": 40,
   "lighting_per_m2_floor": 20,
-  "coolroof_per_m2_roof": 12
+  "coolroof_per_m2_roof": 12,
+  "insulation_per_m2_envelope": 45,
+  "hvac_per_m2_floor": 90
 }

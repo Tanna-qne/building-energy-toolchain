@@ -1,0 +1,9 @@
+{
+  "name": "retrofit_office",
+  "width": 30, "depth": 20,
+  "stories": 2,
+  "building_type": "MediumOffice",
+  "hvac": "VAV_Chiller_Boiler",
+  "construction_vintage": "1980_2004",
+  "vintage": "DOE_Ref_1980_2004"
+}
