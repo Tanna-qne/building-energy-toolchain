@@ -314,8 +314,7 @@ Pages 狀態 `built`,已實測回 200。
 6. **報告自動化**:目前 `sensitivity.py` 手動跑,可考慮 CI(GitHub Actions)自動重建 Pages。
 7. **`db_import.py` 加 `--weather`**:目前氣象檔寫死 Chicago(`batch_driver.WEATHER`)。
 8. **清理**:`scan/scan.py`、`db-energy-case/dbcase.py` 已被取代,確認後可刪。
-9. **DesignBuilder 模型的加強隔熱 / 高效率空調**:參數模型已有(見 §15),DB 匯出的 IDF 還沒有。
-   MCP 沒有改材料厚度與空調 COP 的工具,要在 MCP 加工具(可參考 NREL BCL 的 Increase R-value / Set COP 措施)。
+9. ~~DesignBuilder 模型的加強隔熱 / 高效率空調~~:2026-11-01 完成,MCP 新增兩個工具(見 §15)。
 
 ---
 
@@ -465,6 +464,9 @@ handover/
 - 貨幣與價格集中在根目錄 `costs.json`(預設 USD);結果欄位改成 `saving_cost` / `capex_cost` / `currency`,敏感度網頁的電價改用基準的倍數。
 - 加強隔熱、高效率空調(只限參數模型):`build_idf.py` 另建變體(`<name>.variants/`),外牆與屋頂換較新 / 較冷氣候區的構造;
   空調用 OpenStudio SDK 改效率。成本在 `costs.json` 的 `insulation_per_m2_envelope` / `hvac_per_m2_floor`。
+- MCP 新增兩個工具(本機,不是上游;37 個工具):`upgrade_insulation`(外牆 / 屋頂構造加一層保溫到目標 U,只換外部表面的構造)、
+  `upgrade_hvac_efficiency`(冰水主機 / DX 冷氣 COP ×1.25、鍋爐與瓦斯加熱器 95%、風扇 0.7)。邏輯在 `utils/retrofit.py`,
+  參考 NREL BCL 的 Increase R-value / Set COP 措施。DB 與範例模型用它們;理想負載模型的空調改用換算效率。
 - MCP `config.py`:版本號從 IDD 讀(原本寫死 26.1.0);temp 資料夾改到 repo 內的 `temp/`(`%TEMP%` 底下在 DSH 與 sandbox 都建不了)。
 - DSH:`cordis.patch.yml` 的四個 MCP 改寫在 `insert:` 底下(DSH 端完成),對話內 46 個 MCP 工具都已載入。
 

@@ -145,15 +145,19 @@ def test_db_designbuilder_export():
           f"理想負載的暖氣沒有換算成天然氣: gas={base['gas_kwh']} note={base['error']}")
     check("U 值維持 1.96" in cases["film_shgc0.30"]["error"], "沒有從 .eio 讀到窗戶性質")
     check(float(cases["infil_x0.5"]["saving_pct"]) > 0, "只有暖氣的模型, 滲風減半應該要省")
+    check("外牆 U" in cases["insulation"]["error"] and float(cases["insulation"]["saving_pct"]) > 0,
+          f"DB 模型應能用 MCP 工具加強隔熱: {cases['insulation']}")
+    check("理想負載" in cases["hvac_eff"]["error"] and float(cases["hvac_eff"]["saving_pct"]) > 0,
+          f"理想負載模型的高效率空調應改用換算效率: {cases['hvac_eff']}")
 
 
 def test_scan2_samples():
-    """5 個範例模型 × 7 情境平行跑完, 並重產生敏感度網頁。"""
+    """5 個範例模型 × 9 情境平行跑完, 並重產生敏感度網頁。"""
     code, log = run(WS / "scan2" / "scan2.py")
     check(code == 0, f"scan2 失敗:\n{log[-1500:]}")
     rs = rows(WS / "scan2" / "results.csv")
-    check(len(rs) == 35 and all(r["success"] == "True" for r in rs),
-          f"35 個情境應全部成功: {[(r['model'], r['case'], r['error']) for r in rs if r['success'] != 'True']}")
+    check(len(rs) == 45 and all(r["success"] == "True" for r in rs),
+          f"45 個情境應全部成功: {[(r['model'], r['case'], r['error']) for r in rs if r['success'] != 'True']}")
     base = by_case(rs, "5ZoneAirCooled")["baseline"]
     check((base["elec_kwh"], base["gas_kwh"], base["floor_m2"]) == ("43510.1", "19018.4", "463.6"),
           f"5ZoneAirCooled 基準改變了: {base['elec_kwh']} / {base['gas_kwh']} / {base['floor_m2']}")

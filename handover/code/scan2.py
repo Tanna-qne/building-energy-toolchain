@@ -153,6 +153,7 @@ def run(client, idf: Path):
     payload = parse(client.tool("run_energyplus_simulation", sim_args(idf), 900))
     elec = gas = None
     district = ""
+    cool = heat = 0.0
     out_dir = payload.get("output_directory")
     if payload.get("success") and out_dir:
         od = Path(out_dir)
@@ -173,8 +174,50 @@ def run(client, idf: Path):
                          f"{heat:,.0f} 度熱量(暖氣或熱水)以瓦斯鍋爐效率 {IDEAL_HEAT_EFF:.0%} 換成天然氣" if heat else ""]
                 district = "模型有部分冷 / 熱是用「區域能源」表示,沒有實際設備:" + "、".join(p for p in parts if p)
     return {"success": bool(payload.get("success")), "elec": elec, "gas": gas, "district": district,
+            "cool_dist": cool, "heat_dist": heat,
             "seconds": round(time.time() - started, 1), "out_dir": out_dir,
             "error": (payload.get("error") or "")[:100]}
+
+
+def mcp_retrofit(client, tool, src: Path, out_path: Path):
+    """呼叫本機新增的 upgrade_insulation / upgrade_hvac_efficiency, 回傳 (IDF 路徑或 None, 修改清單)。"""
+    out_path = out_path.resolve()
+    out_path.unlink(missing_ok=True)
+    data = parse(client.tool(tool, {"idf_path": str(src), "output_path": str(out_path)}, 120))
+    changes = data.get("modifications_made") or []
+    return (out_path if data.get("success") and changes and out_path.exists() else None), changes
+
+
+def retrofit_measures(client, name, src: Path, base, models_dir: Path):
+    """沒有參數變體的模型(DesignBuilder / 範例)用 MCP 工具做加強隔熱與高效率空調。回傳 [(措施, 結果, 說明)]。"""
+    out = []
+    path, ch = mcp_retrofit(client, "upgrade_insulation", src, models_dir / f"{name}__insul.idf")
+    if path:
+        label = {"wall": "外牆", "roof": "屋頂"}
+        note = "、".join(f"{label[c['type']]} U {c['u_old']:.2f} → {c['u_new']:.2f}" for c in ch[:2]) + \
+            " W/m²K(在原構造加一層保溫)"
+        out.append(("insulation", run(client, path), note))
+    else:
+        out.append(("insulation", failed("牆和屋頂已經達到目標保溫(外牆 U ≤ 0.25、屋頂 ≤ 0.18),或沒有外露的牆與屋頂"), ""))
+
+    path, ch = mcp_retrofit(client, "upgrade_hvac_efficiency", src, models_dir / f"{name}__hvac.idf")
+    if path:
+        seen = {}
+        for c in ch:
+            seen.setdefault(c["field"], c)
+        note = "、".join(f"{c['object'].split(':')[-1].title()} {c['field'].replace('_', ' ')} {c['old']:g} → {c['new']:g}"
+                        for c in seen.values())
+        out.append(("hvac_eff", run(client, path), note))
+    elif base.get("success") and (base.get("cool_dist") or base.get("heat_dist")):
+        # 理想負載沒有實際設備: 換算用的冷氣 COP 與鍋爐效率提高, 不必另跑模擬
+        cool, heat = base["cool_dist"], base["heat_dist"]
+        res = dict(base, elec=round(base["elec"] - cool / IDEAL_COOL_COP + cool / (IDEAL_COOL_COP * 1.25), 1),
+                   gas=round(base["gas"] - heat / IDEAL_HEAT_EFF + heat / 0.95, 1), seconds=0, error="")
+        out.append(("hvac_eff", res, f"理想負載沒有實際設備,改用換算效率:冷氣 COP {IDEAL_COOL_COP:g} → "
+                                     f"{IDEAL_COOL_COP * 1.25:g}、鍋爐效率 {IDEAL_HEAT_EFF:.0%} → 95%"))
+    else:
+        out.append(("hvac_eff", failed("找不到可以提高效率的空調設備(或效率欄位是自動計算)"), ""))
+    return out
 
 
 def failed(error):
@@ -302,11 +345,17 @@ def scan_models(client, models, models_dir: Path):
 
         # 換構造 / 換設備的措施: MCP 沒有工具, 由 build_idf.py 另建的變體模型直接模擬(見 db_import.variants)
         var_results = []
-        for key in ("insulation", "hvac_eff"):
-            if key in extras:
-                path, note = extras[key]
-                var_results.append((key, run(client, Path(path)) if path else failed(note), key))
-                if path:
+        if extras:  # 參數模型: 用 build_idf.py 另建的變體(構造庫的真實構造、OpenStudio 改的設備)
+            for key in ("insulation", "hvac_eff"):
+                if key in extras:
+                    path, note = extras[key]
+                    var_results.append((key, run(client, Path(path)) if path else failed(note), key))
+                    if path:
+                        notes[key] = note
+        else:  # DesignBuilder / 範例模型: 用本機新增的 MCP 工具直接改 IDF
+            for key, res, note in retrofit_measures(client, name, src, base, models_dir):
+                var_results.append((key, res, key))
+                if note:
                     notes[key] = note
         walls = roof_area(Path(base["out_dir"]), "Wall") if base["out_dir"] else None
 

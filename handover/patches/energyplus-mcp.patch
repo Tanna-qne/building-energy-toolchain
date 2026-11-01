@@ -86,10 +86,42 @@ index f57459f..7ca40f5 100644
          """Configure logging based on configuration"""
          log_level = getattr(logging, self.server.log_level.upper(), logging.INFO)
 diff --git a/energyplus-mcp-server/energyplus_mcp_server/energyplus_tools.py b/energyplus-mcp-server/energyplus_mcp_server/energyplus_tools.py
-index f7fafc5..8c885a6 100644
+index f7fafc5..34862cf 100644
 --- a/energyplus-mcp-server/energyplus_mcp_server/energyplus_tools.py
 +++ b/energyplus-mcp-server/energyplus_mcp_server/energyplus_tools.py
-@@ -2389,7 +2389,8 @@ class EnergyPlusManager:
+@@ -2363,6 +2363,31 @@ class EnergyPlusManager:
+             raise RuntimeError(f"Error modifying simulation settings: {str(e)}")
+ 
+ 
++    def _retrofit(self, idf_path: str, output_path: Optional[str], suffix: str, fn, **kwargs) -> str:
++        """本機新增: 讀 IDF -> fn(idf, **kwargs) 改模型 -> 存檔, 回傳 JSON(沒改到任何東西時不存檔)。"""
++        resolved_path = self._resolve_idf_path(idf_path)
++        idf = IDF(resolved_path)
++        changes = fn(idf, **kwargs)
++        if output_path is None:
++            path_obj = Path(resolved_path)
++            output_path = str(path_obj.parent / f"{path_obj.stem}_{suffix}{path_obj.suffix}")
++        if changes:
++            idf.save(output_path)
++        return json.dumps({"success": True, "input_file": resolved_path,
++                           "output_file": output_path if changes else None,
++                           "modifications_made": changes, "total_modifications": len(changes)}, indent=2)
++
++    def upgrade_insulation(self, idf_path: str, wall_u: float = 0.25, roof_u: float = 0.18,
++                           output_path: Optional[str] = None) -> str:
++        from .utils.retrofit import upgrade_insulation
++        return self._retrofit(idf_path, output_path, "insulated", upgrade_insulation, wall_u=wall_u, roof_u=roof_u)
++
++    def upgrade_hvac_efficiency(self, idf_path: str, cop_factor: float = 1.25, heater_eff: float = 0.95,
++                                fan_eff: float = 0.7, output_path: Optional[str] = None) -> str:
++        from .utils.retrofit import upgrade_hvac_efficiency
++        return self._retrofit(idf_path, output_path, "hvac_eff", upgrade_hvac_efficiency,
++                              cop_factor=cop_factor, heater_eff=heater_eff, fan_eff=fan_eff)
++
+     def add_coating_outside(self, idf_path: str, location, solar_abs=0.4, thermal_abs=0.9, 
+                             output_path: Optional[str] = None) -> str:
+ 
+@@ -2389,7 +2414,8 @@ class EnergyPlusManager:
                  path_obj = Path(resolved_path)
                  output_path = str(path_obj.parent / f"{path_obj.stem}_modified{path_obj.suffix}")
              
@@ -99,7 +131,7 @@ index f7fafc5..8c885a6 100644
              if location.casefold() == "wall":
                  all_surfs.extend(idf.idfobjects['Wall:Detailed'])
              elif location.casefold() == "roof":
-@@ -2405,7 +2406,7 @@ class EnergyPlusManager:
+@@ -2405,7 +2431,7 @@ class EnergyPlusManager:
              construction_names = set([x.Construction_Name for x in ext_surfs])
              constructions = [x for x in idf.idfobjects["Construction"] if x.Name in construction_names]
              ext_layer_names = set([x.Outside_Layer for x in constructions])
@@ -109,7 +141,7 @@ index f7fafc5..8c885a6 100644
              ext_layers = [x for x in materials if x.Name in ext_layer_names]
              logger.debug(f"Found {len(ext_layers)} exterior layers for {location} surfaces: {ext_surf_names}")
 diff --git a/energyplus-mcp-server/energyplus_mcp_server/server.py b/energyplus-mcp-server/energyplus_mcp_server/server.py
-index ce3a627..672c913 100644
+index ce3a627..1a19791 100644
 --- a/energyplus-mcp-server/energyplus_mcp_server/server.py
 +++ b/energyplus-mcp-server/energyplus_mcp_server/server.py
 @@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
@@ -120,7 +152,83 @@ index ce3a627..672c913 100644
  
  # Initialize FastMCP server.
  #
-@@ -1084,7 +1085,7 @@ async def get_server_status() -> str:
+@@ -699,6 +700,75 @@ async def add_window_film_outside(
+         return f"Error adding window film for {idf_path}: {str(e)}"
+ 
+ 
++@mcp.tool()
++async def upgrade_insulation(
++    idf_path: str,
++    wall_u: float = 0.25,
++    roof_u: float = 0.18,
++    output_path: Optional[str] = None
++) -> str:
++    """
++    Add insulation to exterior wall / roof constructions whose U-value is worse than the target
++    (a no-mass insulation layer is inserted after the outside layer; a copy of the construction is
++    assigned to exterior surfaces only, so shared interior constructions are untouched).
++
++    Args:
++        idf_path: Path to the input IDF file
++        wall_u: Target exterior wall U-value in W/m2-K, including surface films (default: 0.25)
++        roof_u: Target roof U-value in W/m2-K, including surface films (default: 0.18)
++        output_path: Optional path for output file (if None, creates one with _insulated suffix).
++                     No file is written when nothing needs upgrading.
++
++    Returns:
++        JSON string with the constructions changed (old U, new U, added R)
++    """
++    try:
++        logger.info(f"Upgrading insulation: {idf_path}")
++        result = ep_manager.upgrade_insulation(idf_path=idf_path, wall_u=wall_u, roof_u=roof_u, output_path=output_path)
++        return f"Insulation upgrade results:\n{result}"
++    except FileNotFoundError as e:
++        return f"File not found: {str(e)}"
++    except Exception as e:
++        logger.error(f"Error upgrading insulation for {idf_path}: {str(e)}")
++        return f"Error upgrading insulation for {idf_path}: {str(e)}"
++
++
++@mcp.tool()
++async def upgrade_hvac_efficiency(
++    idf_path: str,
++    cop_factor: float = 1.25,
++    heater_eff: float = 0.95,
++    fan_eff: float = 0.7,
++    output_path: Optional[str] = None
++) -> str:
++    """
++    Raise HVAC equipment efficiency: chiller and DX cooling COP are multiplied by cop_factor;
++    boiler / fuel heating coil efficiency and fan total efficiency are raised to at least the given values.
++    Autosized or blank fields are left alone. Ideal-load models have no equipment and are not changed.
++
++    Args:
++        idf_path: Path to the input IDF file
++        cop_factor: Multiplier for cooling COP (default: 1.25)
++        heater_eff: Minimum boiler / burner efficiency (default: 0.95)
++        fan_eff: Minimum fan total efficiency (default: 0.7)
++        output_path: Optional path for output file (if None, creates one with _hvac_eff suffix).
++                     No file is written when nothing changes.
++
++    Returns:
++        JSON string with the fields changed (old, new)
++    """
++    try:
++        logger.info(f"Upgrading HVAC efficiency: {idf_path}")
++        result = ep_manager.upgrade_hvac_efficiency(idf_path=idf_path, cop_factor=cop_factor, heater_eff=heater_eff,
++                                                    fan_eff=fan_eff, output_path=output_path)
++        return f"HVAC efficiency upgrade results:\n{result}"
++    except FileNotFoundError as e:
++        return f"File not found: {str(e)}"
++    except Exception as e:
++        logger.error(f"Error upgrading HVAC efficiency for {idf_path}: {str(e)}")
++        return f"Error upgrading HVAC efficiency for {idf_path}: {str(e)}"
++
++
+ @mcp.tool()
+ async def add_coating_outside(
+     idf_path: str,
+@@ -1084,7 +1154,7 @@ async def get_server_status() -> str:
                  "name": config.server.name,
                  "version": config.server.version,
                  "status": "running",
@@ -129,3 +237,121 @@ index ce3a627..672c913 100644
                  "debug_mode": config.debug_mode
              },
              "system": {
+diff --git a/energyplus-mcp-server/energyplus_mcp_server/utils/retrofit.py b/energyplus-mcp-server/energyplus_mcp_server/utils/retrofit.py
+new file mode 100644
+index 0000000..51855e2
+--- /dev/null
++++ b/energyplus-mcp-server/energyplus_mcp_server/utils/retrofit.py
+@@ -0,0 +1,112 @@
++"""兩個改造措施的 IDF 修改(本機新增, 不是上游): 加強外牆 / 屋頂隔熱、提高空調設備效率。
++
++做法參考 NREL BCL 的 "Increase R-value of Insulation" 與 "Set COP for DX Cooling Units" 措施:
++- 隔熱: 外牆 / 屋頂的構造算出 U 值, 比目標差就加一層無質量保溫補到目標;
++  複製一份新構造只給外部表面用, 共用同構造的室內隔間不受影響。
++- 空調: 冰水主機 / DX 冷氣 COP 乘上倍數, 鍋爐與瓦斯加熱器效率、風扇總效率拉到下限。
++"""
++
++# 表面熱阻(室內 + 室外膜), ASHRAE 冬季條件; 用來從材料層算 U 值
++FILM_R = {"wall": 0.13 + 0.04, "roof": 0.10 + 0.04}
++
++
++def _layers(construction):
++    """Construction 的材料層名稱(Outside_Layer, Layer_2 …)。"""
++    names = [construction.Outside_Layer]
++    for i in range(2, 11):
++        v = getattr(construction, f"Layer_{i}", "")
++        if v:
++            names.append(v)
++    return [n for n in names if n]
++
++
++def _material_r(idf, name):
++    """一層材料的熱阻 m²K/W;讀不到(例如玻璃類)回傳 None。"""
++    for obj in idf.idfobjects["MATERIAL"]:
++        if obj.Name.upper() == name.upper():
++            return float(obj.Thickness) / float(obj.Conductivity)
++    for kind in ("MATERIAL:NOMASS", "MATERIAL:AIRGAP"):
++        for obj in idf.idfobjects[kind]:
++            if obj.Name.upper() == name.upper():
++                return float(obj.Thermal_Resistance)
++    return None
++
++
++def upgrade_insulation(idf, wall_u=0.25, roof_u=0.18):
++    """外牆 U 比 wall_u 差、屋頂比 roof_u 差的構造, 加一層保溫補到目標。回傳修改清單。"""
++    targets = {"wall": wall_u, "roof": roof_u}
++    surfaces = [s for s in idf.idfobjects["BUILDINGSURFACE:DETAILED"]
++                if s.Outside_Boundary_Condition.lower() == "outdoors" and s.Surface_Type.lower() in targets]
++    constructions = {c.Name.upper(): c for c in idf.idfobjects["CONSTRUCTION"]}
++    changes, new_names = [], {}
++    for s in surfaces:
++        kind = s.Surface_Type.lower()
++        key = (s.Construction_Name.upper(), kind)
++        if key not in new_names:
++            new_names[key] = None
++            c = constructions.get(key[0])
++            if c is None:
++                continue
++            rs = [_material_r(idf, n) for n in _layers(c)]
++            if any(r is None for r in rs):
++                continue  # 有讀不到熱阻的層(非一般材料), 不動
++            r_total = sum(rs) + FILM_R[kind]
++            u_old = 1 / r_total
++            if u_old <= targets[kind]:
++                continue
++            add_r = 1 / targets[kind] - r_total
++            mat = idf.newidfobject("MATERIAL:NOMASS", Name=f"Added insulation {kind} {c.Name}"[:100],
++                                   Roughness="MediumRough", Thermal_Resistance=round(add_r, 3),
++                                   Thermal_Absorptance=0.9, Solar_Absorptance=0.7, Visible_Absorptance=0.7)
++            layers = _layers(c)
++            # 放在最外層之後(外保溫的位置), 外層材料的日射吸收率等表面性質不變
++            new_layers = layers[:1] + [mat.Name] + layers[1:]
++            if len(new_layers) > 10:
++                continue
++            nc = idf.newidfobject("CONSTRUCTION", Name=f"{c.Name} insulated"[:100], Outside_Layer=new_layers[0])
++            for i, n in enumerate(new_layers[1:], start=2):
++                setattr(nc, f"Layer_{i}", n)
++            new_names[key] = nc.Name
++            changes.append({"construction": c.Name, "type": kind, "u_old": round(u_old, 3),
++                            "u_new": targets[kind], "added_r": round(add_r, 3)})
++        if new_names[key]:
++            s.Construction_Name = new_names[key]
++    return changes
++
++
++# (物件類別, 欄位, 方式) 方式: ("mul", 倍數) 或 ("min", 下限)
++HVAC_FIELDS = [
++    ("CHILLER:ELECTRIC:EIR", "Reference_COP", "cop"),
++    ("CHILLER:ELECTRIC:REFORMULATEDEIR", "Reference_COP", "cop"),
++    ("CHILLER:ELECTRIC", "Nominal_COP", "cop"),
++    ("CHILLER:CONSTANTCOP", "Nominal_COP", "cop"),
++    ("COILPERFORMANCE:DX:COOLING", "Gross_Rated_Cooling_COP", "cop"),
++    ("COIL:COOLING:DX:SINGLESPEED", "Gross_Rated_Cooling_COP", "cop"),
++    ("COIL:COOLING:DX:TWOSPEED", "High_Speed_Gross_Rated_Cooling_COP", "cop"),
++    ("COIL:COOLING:DX:TWOSPEED", "Low_Speed_Gross_Rated_Cooling_COP", "cop"),
++    ("HVACTEMPLATE:PLANT:CHILLER", "Nominal_COP", "cop"),
++    ("BOILER:HOTWATER", "Nominal_Thermal_Efficiency", "heat"),
++    ("COIL:HEATING:FUEL", "Burner_Efficiency", "heat"),
++    ("HVACTEMPLATE:PLANT:BOILER", "Efficiency", "heat"),
++    ("FAN:VARIABLEVOLUME", "Fan_Total_Efficiency", "fan"),
++    ("FAN:CONSTANTVOLUME", "Fan_Total_Efficiency", "fan"),
++    ("FAN:ONOFF", "Fan_Total_Efficiency", "fan"),
++]
++
++
++def upgrade_hvac_efficiency(idf, cop_factor=1.25, heater_eff=0.95, fan_eff=0.7):
++    """冷氣 / 冰水主機 COP ×cop_factor, 鍋爐與瓦斯加熱器效率、風扇效率拉到下限。回傳修改清單。"""
++    changes = []
++    for kind, field, how in HVAC_FIELDS:
++        if kind not in idf.idfobjects:
++            continue
++        for obj in idf.idfobjects[kind]:
++            try:
++                old = float(getattr(obj, field))
++            except (ValueError, TypeError, AttributeError):
++                continue  # 空白或 autosize
++            new = round(old * cop_factor, 3) if how == "cop" else max(old, heater_eff if how == "heat" else fan_eff)
++            if new != old:
++                setattr(obj, field, new)
++                changes.append({"object": kind, "name": obj.Name, "field": field, "old": old, "new": new})
++    return changes
