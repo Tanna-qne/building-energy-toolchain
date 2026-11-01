@@ -9,6 +9,7 @@ tools/modeler/home/
 logs/
 */models/
 db_models/inbox/
+db_models/built/
 db_models/work/
 db_models/out/
 db_models/test/

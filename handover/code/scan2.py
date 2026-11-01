@@ -141,7 +141,7 @@ def film_args(glz):
     """貼膜只降 SHGC, U 值沿用原窗: 工具會把外窗整個換成簡化玻璃, 固定 U 會把好窗換成差窗。
     回傳 (參數, 不貼的原因)。"""
     if glz is None:
-        return None, "讀不到外窗資料(模型可能沒有外窗)"
+        return None, "讀不到外窗資料(模型可能沒有外窗),貼膜不適用"
     u, shgc, vt = glz
     if shgc <= FILM_SKIP_SHGC:
         return None, f"原本的玻璃已經能擋大部分日射(SHGC {shgc:.2f}),貼膜幫助不大"

@@ -11,8 +11,8 @@
 <table>
 <tr><th>項目</th><th>狀態</th><th>備註</th></tr>
 <tr><td>EnergyPlus 26.2.0</td><td>✅ 可用</td><td>可攜版,免管理員</td></tr>
-<tr><td>EnergyPlus-MCP(35 工具)</td><td>✅ 可用</td><td>已用真實模型驗證</td></tr>
-<tr><td>MCP 在 DSH 對話內可用</td><td>✅ 已驗證</td><td>2026-10-31:patch 改用 <code>insert:</code> 後 35 個 <code>mcp__energyplus__*</code> 都出現,<code>get_server_status</code> 正常(§5.3)</td></tr>
+<tr><td>EnergyPlus-MCP(37 工具)</td><td>✅ 可用</td><td>已用真實模型驗證</td></tr>
+<tr><td>MCP 在 DSH 對話內可用</td><td>✅ 已驗證</td><td>2026-10-31:patch 改用 <code>insert:</code> 後 35 個(現在 37 個) <code>mcp__energyplus__*</code> 都出現,<code>get_server_status</code> 正常(§5.3)</td></tr>
 <tr><td>批量模擬(11 模型)</td><td>✅ 11/11 成功</td><td>自動補電表,見 §6.1</td></tr>
 <tr><td>措施掃描(5×4)</td><td>✅ 20/20 成功</td><td>333 秒,含天然氣</td></tr>
 <tr><td>組合 + 回收期(5×5)</td><td>✅ 25/25 成功</td><td>平行 4 個 MCP,150 秒</td></tr>
@@ -38,7 +38,7 @@
 <pre>
 IDF 模型 ──&gt; EnergyPlus-MCP(stdio JSON-RPC)──&gt; EnergyPlus 26.2 ──&gt; 輸出目錄
                   │                                                  │
-                  │ 35 個工具:load / inspect / modify / run          ├─ *.mtr  電表(能耗)
+                  │ 37 個工具:load / inspect / modify / run          ├─ *.mtr  電表(能耗)
                   │                                                  ├─ *.eio  面積、區域資訊
                   ▼                                                  ├─ *Meter.csv
   驅動腳本(batch_driver / scan / scan2 / db_import)                  └─ *.htm  報表
@@ -202,7 +202,7 @@ cd vendor/EnergyPlus-MCP/energyplus-mcp-server
 <tr><td><code>scan2/scan2.py</code></td><td>全部措施 + 組合 + 成本/回收期;<code>scan_parallel()</code> 平行跑、<code>areas()</code> 從 <code>.eio</code> 取面積、<code>apply()</code> 檢查修改工具是否成功</td></tr>
 <tr><td><code>db_import.py</code></td><td>DB 匯出的 IDF → 升版 → 補電表 → <code>scan_parallel()</code>(§4.2)</td></tr>
 <tr><td><code>run_building.py</code></td><td><strong>一般人用的入口</strong>:<code>python run_building.py 參數.json</code> → 呼叫 <code>build_idf.py</code> 建模 → <code>db_import</code> 跑全部措施 → <code>db_models/out/report.html</code></td></tr>
-<tr><td><code>tools/modeler/build_idf.py</code></td><td>參數 JSON(尺寸 / 樓層 / 窗牆比 / 用途 / 空調)→ Ladybug Tools + OpenStudio 建模 → IDF(放進 <code>db_models/inbox/</code>,參數另存同名 <code>.json</code>)。用自己的 venv(<code>tools/modeler/.venv</code>)</td></tr>
+<tr><td><code>tools/modeler/build_idf.py</code></td><td>參數 JSON(尺寸 / 樓層 / 窗牆比 / 用途 / 空調)→ Ladybug Tools + OpenStudio 建模 → IDF(放進 <code>db_models/built/</code>,參數另存同名 <code>.json</code>)。用自己的 venv(<code>tools/modeler/.venv</code>)</td></tr>
 <tr><td><code>tests/smoke.py</code></td><td>端到端檢查,9 項(含多方案比較、DesignBuilder 匯出檔):建模(長方形 / L 形、VAV / PSZ / PTAC)、錯誤提示、DB 匯入升級與中文檔名、scan2 + 敏感度、批量、eppy patch。已知數字(辦公大樓 EUI 150.5、範例 43,510.1 / 19,018.4 kWh)當回歸基準。範例檔在 <code>tests/fixtures/</code></td></tr>
 <tr><td><code>building_report.py</code></td><td>把結果寫成白話網頁:一句結論、一年能源與費用、每個措施省多少錢的長條圖、「值得考慮 / 看情況 / 不太划算」判讀。<code>scan2.write_outputs()</code> 自動呼叫</td></tr>
 <tr><td><code>sensitivity.py</code></td><td>電價/成本敏感度 → 產生 <code>report/index.html</code> 與 <code>sensitivity.csv</code></td></tr>
@@ -277,6 +277,7 @@ C:\Users\kiri\Documents\deepseek-harness\default-workspace\
 ├─ db-energy-case\dbcase.py
 ├─ db-energy-case\case_study\results.md
 ├─ db_models\inbox\                  (DB 匯出的 IDF 放這裡)
+├─ db_models\built\                  (參數建模產生的 IDF 與變體;和 inbox 分開,免得 db_import 不帶參數時全部重跑)
 ├─ db_models\work\ · out\            (db_import 的中間檔與結果)
 ├─ logs\mcp-N.log                    (各 MCP server 的 stderr)
 ├─ batch\report.md · results.csv · models\
@@ -292,7 +293,7 @@ C:\Users\kiri\Documents\deepseek-harness\default-workspace\
       └─ sample_files\ (5ZoneAirCooled.idf、HVACTemplate-5ZoneVAVFanPowered.idf、batch\ 11 個模型)
 </pre>
 <hr>
-<h2>12. 附錄 A:MCP 的 35 個工具</h2>
+<h2>12. 附錄 A:MCP 的 37 個工具</h2>
 <pre>
 copy_file, load_idf_model, get_model_summary, check_simulation_settings,
 inspect_schedules, inspect_people, modify_people, inspect_lights, modify_lights,
@@ -303,7 +304,7 @@ get_output_variables, get_output_meters, add_output_variables, add_output_meters
 list_available_files, get_server_configuration, get_server_status,
 discover_hvac_loops, get_loop_topology, visualize_loop_diagram,
 run_energyplus_simulation, create_interactive_plot, get_server_logs,
-get_error_logs, clear_logs
+get_error_logs, clear_logs, upgrade_insulation, upgrade_hvac_efficiency
 </pre>
 <p>實務上最常用:<code>load_idf_model</code>、<code>inspect_lights</code>、<code>modify_lights</code>、</p>
 <p><code>change_infiltration_by_mult</code>、<code>add_window_film_outside</code>、<code>run_energyplus_simulation</code>。</p>
@@ -395,6 +396,10 @@ handover/
 <ul>
 <li>MCP <code>config.py</code>:版本號從 IDD 讀(原本寫死 26.1.0);temp 資料夾改到 repo 內的 <code>temp/</code>(<code>%TEMP%</code> 底下在 DSH 與 sandbox 都建不了)。</li>
 <li>DSH:<code>cordis.patch.yml</code> 的四個 MCP 改寫在 <code>insert:</code> 底下(DSH 端完成),對話內 46 個 MCP 工具都已載入。</li>
+<li>給 DSH 的交接:<code>handover/HARNESS.md</code>(使用者需求 → 指令、參數、怎麼回報),<code>AGENTS.md</code> 指向它。</li>
+<li><code>build_idf.validate()</code>:欄位拼錯(原本會被默默忽略)、L 形缺尺寸、型別或範圍錯、非英文 name、JSON 格式錯,都改成一行說明。</li>
+<li>參數建模的 IDF 改放 <code>db_models/built/</code>,<code>inbox/</code> 只留 DB 匯出檔(原本 <code>db_import.py</code> 不帶參數會把所有建過的模型重跑)。</li>
+<li>報告:回本超過 50 年改印「超過 50 年」;天然氣標示改成「暖氣、熱水」(電暖器建築的天然氣其實是熱水)。</li>
 </ul>
 <p><strong>驗證方式</strong>:重構後 <code>scan2</code> 依序與平行兩種跑法,和修改前逐筆比對結果一致;<code>db_import</code> 用 25.1 舊版 IDF</p>
 <p>與中文檔名實測,數字和 26.2 範例完全相同。各檔修改前的版本留在旁邊的 <code>*.bak-20261029</code></p>

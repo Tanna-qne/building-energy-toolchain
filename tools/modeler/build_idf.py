@@ -1,4 +1,4 @@
-"""參數 JSON -> 建好 EnergyPlus 模型(IDF, 放進 db_models/inbox/)。
+"""參數 JSON -> 建好 EnergyPlus 模型(IDF, 放進 db_models/built/; inbox 只留給 DesignBuilder 匯出檔)。
 
 平常用根目錄的 run_building.py, 它會呼叫這支再接著跑模擬。單獨用(只建模):
     tools/modeler/.venv/Scripts/python.exe tools/modeler/build_idf.py tools/modeler/example.json
@@ -9,6 +9,7 @@
 """
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -23,7 +24,7 @@ from ladybug_geometry.geometry3d import Point3D, Face3D  # noqa: E402
 from dragonfly.building import Building  # noqa: E402
 from dragonfly.model import Model  # noqa: E402
 from dragonfly.windowparameter import SimpleWindowRatio  # noqa: E402
-from honeybee_energy.lib.constructionsets import construction_set_by_identifier  # noqa: E402
+from honeybee_energy.lib.constructionsets import CONSTRUCTION_SETS, construction_set_by_identifier  # noqa: E402
 from honeybee_energy.lib.programtypes import BUILDING_TYPES  # noqa: E402
 from honeybee_energy.hvac.allair.vav import VAV  # noqa: E402
 from honeybee_energy.hvac.allair.psz import PSZ  # noqa: E402
@@ -38,7 +39,7 @@ for stream in (sys.stdout, sys.stderr):
 
 EP = Path(r"C:/Users/kiri/AppData/Local/Programs/EnergyPlusV26-2-0/EnergyPlus-26.2.0-4bd7a1f26f-Windows-x86_64")
 EPW = EP / "WeatherData" / "USA_IL_Chicago-OHare.Intl.AP.725300_TMY3.epw"  # 同 batch_driver.WEATHER
-INBOX = WS / "db_models" / "inbox"
+BUILT = WS / "db_models" / "built"
 HVAC_TYPES = {t: cls for cls in (VAV, PSZ, PTAC) for t in cls.EQUIPMENT_TYPES}
 
 DEFAULTS = {
@@ -179,27 +180,62 @@ def build(p, cs=None, hvac_upgrade=False):
     return openstudio.energyplus.ForwardTranslator().translateModel(os_model), hb_model, note
 
 
+REQUIRED = ("name", "width", "depth")
+L_KEYS = ("notch_width", "notch_depth")
+
+
+def validate(p):
+    """參數填錯時給一行看得懂的原因, 不要等到建模深處才噴 traceback。"""
+    known = set(DEFAULTS) | set(REQUIRED) | set(L_KEYS)
+    unknown = [k for k in p if k not in known]
+    if unknown:  # 拼錯的欄位(例如 storeys)會被默默忽略, 建出不一樣的建築
+        raise ValueError(f"不認得的參數 {', '.join(unknown)}; 可用的有: {', '.join(sorted(known))}")
+    if p["shape"] not in ("rect", "L"):
+        raise ValueError(f"shape 只支援 rect 或 L, 收到 {p['shape']!r}")
+    missing = [k for k in REQUIRED +(L_KEYS if p["shape"] == "L" else ()) if k not in p]
+    if missing:
+        raise ValueError(f"缺少 {', '.join(missing)}" + ("(L 形要給挖掉的大小)" if p["shape"] == "L" else ""))
+    if not re.fullmatch(r"[A-Za-z0-9_\-]+", str(p["name"])):
+        raise ValueError(f"name 只能用英文、數字、底線、減號(會變成檔名與模型代號), 收到 {p['name']!r}")
+    for k in ("width", "depth", "floor_height") + (L_KEYS if p["shape"] == "L" else ()):
+        if isinstance(p[k], bool) or not isinstance(p[k], (int, float)) or p[k] <= 0:
+            raise ValueError(f"{k} 要是大於 0 的數字(m), 收到 {p[k]!r}")
+    if isinstance(p["stories"], bool) or not isinstance(p["stories"], int) or p["stories"] < 1:
+        raise ValueError(f"stories 要是 1 以上的整數, 收到 {p['stories']!r}")
+    if isinstance(p["wwr"], bool) or not isinstance(p["wwr"], (int, float)) or not 0 <= p["wwr"] < 1:
+        raise ValueError(f"wwr(窗牆比)要在 0 到 1 之間, 例如 0.4, 收到 {p['wwr']!r}")
+    sets = [i.split("::") for i in CONSTRUCTION_SETS if i.count("::") == 2]
+    for k, idx in (("construction_vintage", 0), ("construction", 2)):
+        options = sorted({s[idx] for s in sets})
+        if str(p[k]) not in options:
+            raise ValueError(f"{k} 要是其中之一: {', '.join(options)}")
+    if str(p["climate_zone"]) not in {s[1].removeprefix("ClimateZone") for s in sets}:
+        raise ValueError(f"climate_zone 要是 1–8, 收到 {p['climate_zone']!r}")
+
+
 def main():
     if len(sys.argv) != 2:
         raise SystemExit(__doc__)
-    p = {**DEFAULTS, **json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))}
-    for k in ("name", "width", "depth"):
-        if k not in p:
-            raise SystemExit(f"參數檔缺少 {k}")
+    path = Path(sys.argv[1])
+    try:
+        p = {**DEFAULTS, **json.loads(path.read_text(encoding="utf-8"))}
+    except json.JSONDecodeError as e:
+        raise SystemExit(f"參數錯誤: {path.name} 不是正確的 JSON(第 {e.lineno} 行第 {e.colno} 字: {e.msg})")
 
     try:
+        validate(p)
         workspace, hb_model, _ = build(p)
     except ValueError as e:  # 參數填錯: 只印原因, 不印 traceback
         raise SystemExit(f"參數錯誤: {e}")
-    INBOX.mkdir(parents=True, exist_ok=True)
-    out = INBOX / f"{p['name']}.idf"
+    BUILT.mkdir(parents=True, exist_ok=True)
+    out = BUILT / f"{p['name']}.idf"
     workspace.save(openstudio.path(str(out)), True)
     out.with_suffix(".json").write_text(json.dumps(p, ensure_ascii=False, indent=2), encoding="utf-8")
     floor = sum(r.floor_area * r.multiplier for r in hb_model.rooms)
 
     # 兩個要「換構造 / 換設備」的措施: MCP 沒有對應工具, 用同一組參數重建變體模型。
-    # 放在 <name>.variants/(不在 inbox 根目錄, 免得被當成獨立模型), db_import 會讀 variants.json
-    vdir = INBOX / f"{p['name']}.variants"
+    # 放在 <name>.variants/(不在 built 根目錄, 免得被當成獨立模型), db_import 會讀 variants.json
+    vdir = BUILT / f"{p['name']}.variants"
     vdir.mkdir(exist_ok=True)
     for f in vdir.glob("*.idf"):
         f.unlink()

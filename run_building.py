@@ -40,7 +40,12 @@ def main():
     files = [Path(a) for a in sys.argv[1:]]
     if not files:
         raise SystemExit(__doc__)
-    names = [json.loads(f.read_text(encoding="utf-8")).get("name") for f in files]
+    names = []
+    for f in files:
+        try:
+            names.append(json.loads(f.read_text(encoding="utf-8")).get("name"))
+        except (OSError, json.JSONDecodeError) as e:
+            raise SystemExit(f"{f.name}: 參數錯誤: 讀不到或不是正確的 JSON({e})")
     dup = {n for n in names if names.count(n) > 1}
     if dup:  # 同名會互相覆蓋 IDF 與結果
         raise SystemExit(f"每個方案的 name 要不同,重複的有: {', '.join(map(str, dup))}")

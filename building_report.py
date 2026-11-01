@@ -69,7 +69,12 @@ def verdict(r):
         return "good", "✓", "值得考慮", f"大約 {years:.0f} 年就能把投資省回來。"
     if years <= OK_YEARS:
         return "ok", "!", "看情況", f"要 {years:.0f} 年左右才回本,看預算和設備壽命決定。"
-    return "bad", "✕", "不太划算", f"要 {years:.0f} 年才回本,通常比設備壽命還長。"
+    return "bad", "✕", "不太划算", f"回本要{yrs(years)},通常比設備壽命還長。"
+
+
+def yrs(y):
+    """回本年數; 太長的不印精確數字(212 年這種數字沒有意義, 只會讓人困惑)。"""
+    return f"約 {y:.0f} 年" if y <= 50 else "超過 50 年"
 
 
 SYMBOL = "US$"  # write_html() 依 costs.json 設定
@@ -129,7 +134,7 @@ def model_section(name, rows, costs, meta):
         for k in (1.3, 1.8):
             t = s_elec * costs["price_per_kwh"] * k + s_gas * costs["gas_per_kwh"]
             if capex and t > 0:
-                at.append(f"電價漲 {k - 1:.0%} 時約 {capex / t:.0f} 年")
+                at.append(f"電價漲 {k - 1:.0%} 時{yrs(capex / t)}")
         cards.append({"case": r["case"], "title": title, "what": what, "level": level, "icon": icon, "label": label, "why": why,
                       "saved": saved if level != "skip" else None, "capex": capex, "years": years,
                       "pct": num(r["saving_pct"]), "s_elec": s_elec, "s_gas": s_gas, "at": at,
@@ -145,7 +150,7 @@ def model_section(name, rows, costs, meta):
         paying = [c for c in cards if c["years"] and c["saved"] and c["saved"] > 0]
         if paying:
             near = min(paying, key=lambda c: c["years"])
-            headline += f"最接近的是「{near['title']}」,約 {near['years']:.0f} 年;電價上漲時會縮短(見下方各項)。"
+            headline += f"最接近的是「{near['title']}」,{yrs(near['years'])};電價上漲時會縮短(見下方各項)。"
 
     desc = ""
     if meta:
@@ -162,7 +167,7 @@ def model_section(name, rows, costs, meta):
              "<h3>這棟建築一年用多少能源</h3>",
              '<div class="tiles">',
              f'<div class="tile"><span class="big">{elec:,.0f}</span> 度電<small>約 {money(elec * costs["price_per_kwh"])}</small></div>',
-             f'<div class="tile"><span class="big">{gas:,.0f}</span> 度天然氣<small>約 {money(gas * costs["gas_per_kwh"])}(主要用在暖氣)</small></div>',
+             f'<div class="tile"><span class="big">{gas:,.0f}</span> 度天然氣<small>約 {money(gas * costs["gas_per_kwh"])}(暖氣、熱水)</small></div>',
              f'<div class="tile"><span class="big">{money(bill)}</span> 一年能源費用</div>',
              f'<div class="tile"><span class="big">{(elec + gas) / floor:,.0f}</span> 度 / m²·年'
              f'<small>每平方公尺一年用多少能源(EUI),越低越省</small></div>' if floor else "",

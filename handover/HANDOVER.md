@@ -19,8 +19,8 @@
 | 項目 | 狀態 | 備註 |
 |---|---|---|
 | EnergyPlus 26.2.0 | ✅ 可用 | 可攜版,免管理員 |
-| EnergyPlus-MCP(35 工具) | ✅ 可用 | 已用真實模型驗證 |
-| MCP 在 DSH 對話內可用 | ✅ 已驗證 | 2026-10-31:patch 改用 `insert:` 後 35 個 `mcp__energyplus__*` 都出現,`get_server_status` 正常(§5.3) |
+| EnergyPlus-MCP(37 工具) | ✅ 可用 | 已用真實模型驗證 |
+| MCP 在 DSH 對話內可用 | ✅ 已驗證 | 2026-10-31:patch 改用 `insert:` 後 35 個(現在 37 個) `mcp__energyplus__*` 都出現,`get_server_status` 正常(§5.3) |
 | 批量模擬(11 模型) | ✅ 11/11 成功 | 自動補電表,見 §6.1 |
 | 措施掃描(5×4) | ✅ 20/20 成功 | 333 秒,含天然氣 |
 | 組合 + 回收期(5×5) | ✅ 25/25 成功 | 平行 4 個 MCP,150 秒 |
@@ -50,7 +50,7 @@
 ```
 IDF 模型 ──> EnergyPlus-MCP(stdio JSON-RPC)──> EnergyPlus 26.2 ──> 輸出目錄
                   │                                                  │
-                  │ 35 個工具:load / inspect / modify / run          ├─ *.mtr  電表(能耗)
+                  │ 37 個工具:load / inspect / modify / run          ├─ *.mtr  電表(能耗)
                   │                                                  ├─ *.eio  面積、區域資訊
                   ▼                                                  ├─ *Meter.csv
   驅動腳本(batch_driver / scan / scan2 / db_import)                  └─ *.htm  報表
@@ -254,7 +254,7 @@ Pages 狀態 `built`,已實測回 200。
 | `scan2/scan2.py` | 全部措施 + 組合 + 成本/回收期;`scan_parallel()` 平行跑、`areas()` 從 `.eio` 取面積、`apply()` 檢查修改工具是否成功 |
 | `db_import.py` | DB 匯出的 IDF → 升版 → 補電表 → `scan_parallel()`(§4.2) |
 | `run_building.py` | **一般人用的入口**:`python run_building.py 參數.json` → 呼叫 `build_idf.py` 建模 → `db_import` 跑全部措施 → `db_models/out/report.html` |
-| `tools/modeler/build_idf.py` | 參數 JSON(尺寸 / 樓層 / 窗牆比 / 用途 / 空調)→ Ladybug Tools + OpenStudio 建模 → IDF(放進 `db_models/inbox/`,參數另存同名 `.json`)。用自己的 venv(`tools/modeler/.venv`) |
+| `tools/modeler/build_idf.py` | 參數 JSON(尺寸 / 樓層 / 窗牆比 / 用途 / 空調)→ Ladybug Tools + OpenStudio 建模 → IDF(放進 `db_models/built/`,參數另存同名 `.json`)。用自己的 venv(`tools/modeler/.venv`) |
 | `tests/smoke.py` | 端到端檢查,9 項(含多方案比較、DesignBuilder 匯出檔):建模(長方形 / L 形、VAV / PSZ / PTAC)、錯誤提示、DB 匯入升級與中文檔名、scan2 + 敏感度、批量、eppy patch。已知數字(辦公大樓 EUI 150.5、範例 43,510.1 / 19,018.4 kWh)當回歸基準。範例檔在 `tests/fixtures/` |
 | `building_report.py` | 把結果寫成白話網頁:一句結論、一年能源與費用、每個措施省多少錢的長條圖、「值得考慮 / 看情況 / 不太划算」判讀。`scan2.write_outputs()` 自動呼叫 |
 | `sensitivity.py` | 電價/成本敏感度 → 產生 `report/index.html` 與 `sensitivity.csv` |
@@ -340,6 +340,7 @@ C:\Users\kiri\Documents\deepseek-harness\default-workspace\
 ├─ db-energy-case\dbcase.py
 ├─ db-energy-case\case_study\results.md
 ├─ db_models\inbox\                  (DB 匯出的 IDF 放這裡)
+├─ db_models\built\                  (參數建模產生的 IDF 與變體;和 inbox 分開,免得 db_import 不帶參數時全部重跑)
 ├─ db_models\work\ · out\            (db_import 的中間檔與結果)
 ├─ logs\mcp-N.log                    (各 MCP server 的 stderr)
 ├─ batch\report.md · results.csv · models\
@@ -356,7 +357,7 @@ C:\Users\kiri\Documents\deepseek-harness\default-workspace\
 ```
 ---
 
-## 12. 附錄 A:MCP 的 35 個工具
+## 12. 附錄 A:MCP 的 37 個工具
 
 ```
 copy_file, load_idf_model, get_model_summary, check_simulation_settings,
@@ -368,7 +369,7 @@ get_output_variables, get_output_meters, add_output_variables, add_output_meters
 list_available_files, get_server_configuration, get_server_status,
 discover_hvac_loops, get_loop_topology, visualize_loop_diagram,
 run_energyplus_simulation, create_interactive_plot, get_server_logs,
-get_error_logs, clear_logs
+get_error_logs, clear_logs, upgrade_insulation, upgrade_hvac_efficiency
 ```
 
 實務上最常用:`load_idf_model`、`inspect_lights`、`modify_lights`、
@@ -469,6 +470,10 @@ handover/
   參考 NREL BCL 的 Increase R-value / Set COP 措施。DB 與範例模型用它們;理想負載模型的空調改用換算效率。
 - MCP `config.py`:版本號從 IDD 讀(原本寫死 26.1.0);temp 資料夾改到 repo 內的 `temp/`(`%TEMP%` 底下在 DSH 與 sandbox 都建不了)。
 - DSH:`cordis.patch.yml` 的四個 MCP 改寫在 `insert:` 底下(DSH 端完成),對話內 46 個 MCP 工具都已載入。
+- 給 DSH 的交接:`handover/HARNESS.md`(使用者需求 → 指令、參數、怎麼回報),`AGENTS.md` 指向它。
+- `build_idf.validate()`:欄位拼錯(原本會被默默忽略)、L 形缺尺寸、型別或範圍錯、非英文 name、JSON 格式錯,都改成一行說明。
+- 參數建模的 IDF 改放 `db_models/built/`,`inbox/` 只留 DB 匯出檔(原本 `db_import.py` 不帶參數會把所有建過的模型重跑)。
+- 報告:回本超過 50 年改印「超過 50 年」;天然氣標示改成「暖氣、熱水」(電暖器建築的天然氣其實是熱水)。
 
 **驗證方式**:重構後 `scan2` 依序與平行兩種跑法,和修改前逐筆比對結果一致;`db_import` 用 25.1 舊版 IDF
 與中文檔名實測,數字和 26.2 範例完全相同。各檔修改前的版本留在旁邊的 `*.bak-20261029`
