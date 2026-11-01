@@ -16,10 +16,13 @@ from scan2.scan2 import COSTS  # noqa: E402
 
 SRC = HERE / "scan2/results.csv"
 OUT = HERE / "report"
-PRICES = [2, 3, 4.5, 6, 8, 10, 12]
+
 CAPEX_MULTS = [0.5, 0.75, 1.0, 1.5, 2.0]
-BASE_PRICE = COSTS["price_twd_per_kwh"]
-GAS_PRICE = COSTS["gas_twd_per_kwh"]  # 敏感度只變電價
+BASE_PRICE = COSTS["price_per_kwh"]
+GAS_PRICE = COSTS["gas_per_kwh"]  # 敏感度只變電價
+CUR = COSTS["currency"]
+# 電價用基準的倍數, 換貨幣(costs.json)也適用
+PRICES = [round(BASE_PRICE * k, 3) for k in (0.5, 0.75, 1, 1.25, 1.5, 2, 2.5)]
 
 
 def load():
@@ -35,25 +38,25 @@ def load():
         try:
             s_elec = float(r["saving_elec_kwh"])
             s_gas = float(r["saving_gas_kwh"] or 0)
-            capex = float(r["capex_twd"] or 0)
+            capex = float(r["capex_cost"] or 0)
         except ValueError:
             continue
         case = {"model": r["model"], "case": r["case"], "saving": s_elec, "saving_gas": s_gas,
                 "capex": capex, "pct": float(r["saving_pct"] or 0)}
-        if capex <= 0 or annual_twd(case, BASE_PRICE) <= 0:
+        if capex <= 0 or annual_cost(case, BASE_PRICE) <= 0:
             continue
         cases.append(case)
     return cases, n_models, n_runs
 
 
-def annual_twd(case, price):
+def annual_cost(case, price):
     return case["saving"] * price + case["saving_gas"] * GAS_PRICE
 
 
 def payback(case, price, mult=1.0):
     """年省金額 <= 0 (電價低到抵不過多燒的天然氣) 時回收期為無限大。"""
-    twd = annual_twd(case, price)
-    return case["capex"] * mult / twd if twd > 0 else float("inf")
+    cost = annual_cost(case, price)
+    return case["capex"] * mult / cost if cost > 0 else float("inf")
 
 
 def cell(v):
@@ -92,7 +95,7 @@ def svg_chart(cases, width=820, height=400):
     parts.append(f'<text x="14" y="{pad_t+8}" font-size="12" fill="#374151">年</text>')
     for p in PRICES:
         parts.append(f'<text x="{x(p):.1f}" y="{height-pad_b+18}" font-size="11" text-anchor="middle" fill="#6b7280">{p:g}</text>')
-    parts.append(f'<text x="{(pad_l+width-pad_r)/2:.0f}" y="{height-6}" font-size="12" text-anchor="middle" fill="#374151">電價 TWD/kWh</text>')
+    parts.append(f'<text x="{(pad_l+width-pad_r)/2:.0f}" y="{height-6}" font-size="12" text-anchor="middle" fill="#374151">電價 {CUR}/kWh</text>')
     for i, m in enumerate(measures):
         color = colors[i % len(colors)]
         pts = " ".join(f"{x(p):.1f},{y(v):.1f}" for p, v in zip(PRICES, series[m]))
@@ -117,7 +120,7 @@ def table_html(cases):
                     f'<td>{c["pct"]:.1f}%</td><td>{c["saving"]:.0f}</td><td>{c["saving_gas"]:.0f}</td><td>{c["capex"]:.0f}</td>'
                     + "".join(cells) + "</tr>")
     return f"""<table>
-<thead><tr><th class="mid">模型</th><th class="mid">措施</th><th>省能源 %</th><th>年省電 kWh</th><th>年省氣 kWh</th><th>投資 TWD</th>{head}</tr></thead>
+<thead><tr><th class="mid">模型</th><th class="mid">措施</th><th>省能源 %</th><th>年省電 kWh</th><th>年省氣 kWh</th><th>投資 {CUR}</th>{head}</tr></thead>
 <tbody>{''.join(rows)}</tbody></table>"""
 
 
@@ -132,7 +135,7 @@ def capex_table(cases):
         rows.append(f'<tr><td class="m">{html.escape(c["model"])}</td><td class="mid">{html.escape(c["case"])}</td>'
                     f'<td>{c["capex"]:.0f}</td>' + "".join(cells) + "</tr>")
     return f"""<table>
-<thead><tr><th class="mid">模型</th><th class="mid">措施</th><th>基準投資 TWD</th>{head}</tr></thead>
+<thead><tr><th class="mid">模型</th><th class="mid">措施</th><th>基準投資 {CUR}</th>{head}</tr></thead>
 <tbody>{''.join(rows)}</tbody></table>"""
 
 
@@ -162,10 +165,10 @@ def main():
  .kpi b{{display:block;font-size:20px}}
 </style></head><body><main>
 <h1>節能措施回收期與敏感度</h1>
-<p class="sub">資料來源:EnergyPlus 模擬({n_models} 個模型、{n_runs} 次執行)+ 假設成本。省電與省氣量固定,只有電價與成本變動(天然氣固定 {GAS_PRICE:g} TWD/kWh)。</p>
+<p class="sub">資料來源:EnergyPlus 模擬({n_models} 個模型、{n_runs} 次執行)+ 假設成本。省電與省氣量固定,只有電價與成本變動(天然氣固定 {GAS_PRICE:g} {CUR}/kWh)。</p>
 
 <div class="kpi">
-  <div><b>{BASE_PRICE:g}</b>TWD/kWh 基準電價</div>
+  <div><b>{BASE_PRICE:g}</b>{CUR}/kWh 基準電價</div>
   <div><b>{len(cases)}</b>個措施組合</div>
   <div><b>{payback(best, BASE_PRICE):.1f} 年</b>最短回收期({html.escape(best["model"])} · {html.escape(best["case"])})</div>
 </div>
@@ -177,7 +180,7 @@ def main():
 <h2>電價敏感度(年)</h2>
 {table_html(cases)}
 
-<h2>成本敏感度(基準電價 {BASE_PRICE:g} TWD/kWh)</h2>
+<h2>成本敏感度(基準電價 {BASE_PRICE:g} {CUR}/kWh)</h2>
 {capex_table(cases)}
 
 <h2>怎麼讀</h2>
@@ -194,7 +197,7 @@ def main():
 
     with open(OUT / "sensitivity.csv", "w", newline="", encoding="utf-8-sig") as f:
         w = csv.writer(f)
-        w.writerow(["model", "case", "saving_elec_kwh", "saving_gas_kwh", "capex_twd"] + [f"payback@{p:g}" for p in PRICES])
+        w.writerow(["model", "case", "saving_elec_kwh", "saving_gas_kwh", "capex_cost"] + [f"payback@{p:g}" for p in PRICES])
         for c in cases:
             w.writerow([c["model"], c["case"], c["saving"], c["saving_gas"], c["capex"]] +
                        [round(payback(c, p), 1) for p in PRICES])

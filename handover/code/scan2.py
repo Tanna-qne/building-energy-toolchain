@@ -29,13 +29,8 @@ MODELS = [
     "HVACTemplate-5ZoneBaseboardHeat",
 ]
 
-COSTS = {
-    "price_twd_per_kwh": 4.5,      # 商業用電, 假設值
-    "gas_twd_per_kwh": 1.5,        # 天然氣約 16 TWD/m³ ÷ 10.5 kWh/m³, 假設值
-    "film_twd_per_m2_glass": 1200,  # 貼膜含施工, 假設值
-    "lighting_twd_per_m2_floor": 600,  # 燈具更新含施工, 假設值
-    "coolroof_twd_per_m2_roof": 350,   # 屋頂反射塗料含施工, 假設值
-}
+# 貨幣、能源價格與施工單價都在根目錄的 costs.json(假設值, 非報價), 報告與敏感度網頁也讀這份
+COSTS = json.loads((Path(__file__).resolve().parent.parent / "costs.json").read_text(encoding="utf-8"))
 COOLROOF_SOLAR_ABS = 0.3  # 反射塗料後屋頂外層的日射吸收率(一般深色屋頂約 0.7)
 EQUIP_FACTOR = 0.8        # 節能設備: 插座 / 設備用電功率 ×0.8
 
@@ -304,9 +299,9 @@ def scan_models(client, models, models_dir: Path):
             "模型沒有一般用電設備物件(ElectricEquipment),這項不適用" if not emods else "設備修改失敗")
 
         capex = {
-            "lights": (floor or 0) * COSTS["lighting_twd_per_m2_floor"],
-            "film": (glass or 0) * COSTS["film_twd_per_m2_glass"],
-            "coolroof": (roof or 0) * COSTS["coolroof_twd_per_m2_roof"],
+            "lights": (floor or 0) * COSTS["lighting_per_m2_floor"],
+            "film": (glass or 0) * COSTS["film_per_m2_glass"],
+            "coolroof": (roof or 0) * COSTS["coolroof_per_m2_roof"],
         }
         capex["combo"] = capex["lights"] + capex["film"]
 
@@ -320,7 +315,7 @@ def scan_models(client, models, models_dir: Path):
             base_total = base["elec"] + base["gas"] if base["elec"] is not None else None
             s_elec = base["elec"] - res["elec"] if ok else None
             s_gas = base["gas"] - res["gas"] if ok else None
-            saving_twd = (s_elec * COSTS["price_twd_per_kwh"] + s_gas * COSTS["gas_twd_per_kwh"]) if ok else None
+            saving_cost = (s_elec * COSTS["price_per_kwh"] + s_gas * COSTS["gas_per_kwh"]) if ok else None
             capex_val = capex.get(key) if key else 0
             parts = {
                 "model": name,
@@ -332,10 +327,11 @@ def scan_models(client, models, models_dir: Path):
                 "saving_elec_kwh": round(s_elec, 1) if ok else None,
                 "saving_gas_kwh": round(s_gas, 1) if ok else None,
                 "saving_pct": round((base_total - total) / base_total * 100, 1) if (ok and base_total) else None,
-                "saving_twd": round(saving_twd) if ok else None,
-                "capex_twd": round(capex_val) if capex_val else 0,
-                "payback_years": round(capex_val / saving_twd, 1)
-                if (saving_twd and saving_twd > 0 and capex_val) else None,
+                "saving_cost": round(saving_cost) if ok else None,
+                "capex_cost": round(capex_val) if capex_val else 0,
+                "payback_years": round(capex_val / saving_cost, 1)
+                if (saving_cost and saving_cost > 0 and capex_val) else None,
+                "currency": COSTS["currency"],
                 "seconds": res["seconds"],
                 "error": res["error"] or notes.get(label, ""),
                 "floor_m2": floor,
@@ -390,16 +386,16 @@ def write_outputs(rows, out_dir: Path, meta=None):
         w.writerows(rows)
 
     lines = ["# 措施組合與回收期", "",
-             f"- 電價假設: {COSTS['price_twd_per_kwh']} TWD/kWh; 天然氣: {COSTS['gas_twd_per_kwh']} TWD/kWh",
-             f"- 貼膜: {COSTS['film_twd_per_m2_glass']} TWD/m² 玻璃; 照明: {COSTS['lighting_twd_per_m2_floor']} TWD/m² 樓地板(有照明的 Zone); "
-             f"屋頂反射漆: {COSTS['coolroof_twd_per_m2_roof']} TWD/m² 屋頂",
+             f"- 貨幣 {COSTS['currency']}; 電價: {COSTS['price_per_kwh']}/kWh; 天然氣: {COSTS['gas_per_kwh']}/kWh(costs.json)",
+             f"- 貼膜: {COSTS['film_per_m2_glass']}/m² 玻璃; 照明: {COSTS['lighting_per_m2_floor']}/m² 樓地板(有照明的 Zone); "
+             f"屋頂反射漆: {COSTS['coolroof_per_m2_roof']}/m² 屋頂",
              "- 年省 % 以總能源(電 + 天然氣)計",
-             "", "| 模型 | 情境 | 用電 kWh | 天然氣 kWh | EUI kWh/m² | 年省 % | 年省 TWD | 投資 TWD | 回收年 | 備註 |",
+             "", f"| 模型 | 情境 | 用電 kWh | 天然氣 kWh | EUI kWh/m² | 年省 % | 年省 {COSTS['currency']} | 投資 {COSTS['currency']} | 回收年 | 備註 |",
              "|---|---|---|---|---|---|---|---|---|---|"]
     for r in rows:
         lines.append(f"| {r['model']} | {r['case']} | {r['elec_kwh'] or ''} | {r['gas_kwh'] if r['gas_kwh'] is not None else ''} | "
                      f"{r['eui_kwh_m2'] or ''} | {r['saving_pct'] if r['saving_pct'] is not None else ''} | "
-                     f"{r['saving_twd'] or ''} | {r['capex_twd'] or ''} | {r['payback_years'] or ''} | {r['error']} |")
+                     f"{r['saving_cost'] or ''} | {r['capex_cost'] or ''} | {r['payback_years'] or ''} | {r['error']} |")
     (out_dir / "report.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
     print("\n".join(lines))
     print(f"\n網頁報告: {write_html(rows, out_dir / 'report.html', COSTS, meta)}")

@@ -255,7 +255,7 @@ Pages 狀態 `built`,已實測回 200。
 | `db_import.py` | DB 匯出的 IDF → 升版 → 補電表 → `scan_parallel()`(§4.2) |
 | `run_building.py` | **一般人用的入口**:`python run_building.py 參數.json` → 呼叫 `build_idf.py` 建模 → `db_import` 跑全部措施 → `db_models/out/report.html` |
 | `tools/modeler/build_idf.py` | 參數 JSON(尺寸 / 樓層 / 窗牆比 / 用途 / 空調)→ Ladybug Tools + OpenStudio 建模 → IDF(放進 `db_models/inbox/`,參數另存同名 `.json`)。用自己的 venv(`tools/modeler/.venv`) |
-| `tests/smoke.py` | 端到端檢查,7 項:建模(長方形 / L 形、VAV / PSZ / PTAC)、錯誤提示、DB 匯入升級與中文檔名、scan2 + 敏感度、批量、eppy patch。已知數字(辦公大樓 EUI 150.5、範例 43,510.1 / 19,018.4 kWh)當回歸基準。範例檔在 `tests/fixtures/` |
+| `tests/smoke.py` | 端到端檢查,9 項(含多方案比較、DesignBuilder 匯出檔):建模(長方形 / L 形、VAV / PSZ / PTAC)、錯誤提示、DB 匯入升級與中文檔名、scan2 + 敏感度、批量、eppy patch。已知數字(辦公大樓 EUI 150.5、範例 43,510.1 / 19,018.4 kWh)當回歸基準。範例檔在 `tests/fixtures/` |
 | `building_report.py` | 把結果寫成白話網頁:一句結論、一年能源與費用、每個措施省多少錢的長條圖、「值得考慮 / 看情況 / 不太划算」判讀。`scan2.write_outputs()` 自動呼叫 |
 | `sensitivity.py` | 電價/成本敏感度 → 產生 `report/index.html` 與 `sensitivity.csv` |
 | `db-energy-case/dbcase.py` | 早期的獨立分析工具:讀 `eplusout.csv`/`eplusmtr.csv` 算 EUI 與分項(不經 MCP);已被 `db_import.py` 取代 |
@@ -459,6 +459,8 @@ handover/
 - 新增兩種措施:屋頂反射漆(`add_coating_outside`,原本已淺色就不做)、節能設備 −20%(`modify_electric_equipment`)。
 - 修上游 MCP bug:`add_coating_outside` 直接 extend `idf.idfobjects[...]`,把 Material:NoMass 重複寫進模型(Severe)。
 - 區域供冷 / 供熱一律換算(包含 honeybee 模型的熱水),辦公大樓 EUI 146.9 → 150.5。
+- 多方案比較:`run_building.py` 可一次給多個參數檔,報告最前面並排比較(一年費用、每 m² 費用、EUI、最划算措施)。
+- 貨幣與價格集中在根目錄 `costs.json`(預設 USD);結果欄位改成 `saving_cost` / `capex_cost` / `currency`,敏感度網頁的電價改用基準的倍數。
 - MCP `config.py`:版本號從 IDD 讀(原本寫死 26.1.0);temp 資料夾改到 repo 內的 `temp/`(`%TEMP%` 底下在 DSH 與 sandbox 都建不了)。
 - DSH:`cordis.patch.yml` 的四個 MCP 改寫在 `insert:` 底下(DSH 端完成),對話內 46 個 MCP 工具都已載入。
 

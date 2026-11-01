@@ -24,3 +24,6 @@ _bak-*/
 handover.zip
 handover-for-claude/
 handover/HANDOVER.old.pdf
+
+# 其他工具的暫存(曾誤收過 Unity 付費素材與截圖)
+.tmp/

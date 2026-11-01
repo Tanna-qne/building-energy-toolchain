@@ -6,6 +6,7 @@
 會覆寫 db_models/out、batch/、scan2/、report/ 的結果(內容與正常執行相同)。
 """
 import csv
+import json
 import shutil
 import subprocess
 import sys
@@ -84,6 +85,20 @@ def test_modeler_shapes_and_hvac():
         check(lo < eui < hi, f"{name}: EUI {eui} 不在合理範圍 {lo}–{hi}")
     floor = float(by_case(rows(OUT / "results.csv"), "small_office")["baseline"]["floor_m2"])
     check(floor == 240.0, f"small_office 樓地板應為 240, 實際 {floor}")
+
+
+def test_compare_options():
+    """兩個方案(同棟、不同空調)一起跑, 報告最前面要有並排比較; 金額依 costs.json 的貨幣。"""
+    code, log = run(WS / "run_building.py", FIX / "option_vav.json", FIX / "option_psz.json")
+    check(code == 0, f"run_building 多方案失敗:\n{log[-1500:]}")
+    rs = rows(OUT / "results.csv")
+    for name in ("office_VAV", "office_PSZ"):
+        all_cases_ok(rs, name)
+    cur = json.loads((WS / "costs.json").read_text(encoding="utf-8"))
+    check(all(r["currency"] == cur["currency"] for r in rs), "結果的貨幣和 costs.json 不一致")
+    html = (OUT / "report.html").read_text(encoding="utf-8")
+    for text in ("方案比較", "一年能源費用最低的是", "最省", 'href="#office_PSZ"', cur["symbol"]):
+        check(text in html, f"比較報告缺少「{text}」")
 
 
 def test_modeler_bad_input():

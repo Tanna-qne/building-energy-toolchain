@@ -32,6 +32,15 @@
    python run_building.py 你的檔案.json
    ```
 
+   要比較幾個方案(例如不同空調、不同樓層數),一次給多個參數檔,每個的 `name` 要不同:
+
+   ```
+   python run_building.py 方案A.json 方案B.json 方案C.json
+   ```
+
+   報告最前面會多一段「方案比較」:哪個方案一年能源費用最低、費用長條圖與對照表。
+   面積不同時改用每 m² 費用比較;總能源最少卻不是最省錢時,也會用一句話說明原因。
+
 3. 用瀏覽器打開 `db_models/out/report.html`:最上面一句話告訴你哪個措施最划算,
    下面依序是一年用多少能源、每個措施一年省多少錢,以及「值得考慮 / 看情況 / 不太划算」的白話判讀。
    給工程師看的明細在同資料夾的 `report.md` 與 `results.csv`。
@@ -47,6 +56,19 @@
 | `construction` | 構造型式 | `SteelFramed`、`WoodFramed`、`Mass`、`Metal Building` |
 | `hvac` | 空調系統 | `VAV_Chiller_Boiler`、`PSZAC_GasCoil`、`PTAC_ElectricBaseboard` 等 |
 | `vintage` | 空調效率依據的年份 | `ASHRAE_2019`(預設)、`DOE_Ref_1980_2004` |
+
+## 貨幣與價格(`costs.json`)
+
+報告的貨幣、電價、氣價與施工單價都在根目錄的 `costs.json`,預設美元:
+
+```json
+{"currency": "USD", "symbol": "US$", "price_per_kwh": 0.13, "gas_per_kwh": 0.04,
+ "film_per_m2_glass": 40, "lighting_per_m2_floor": 20, "coolroof_per_m2_roof": 12}
+```
+
+都是假設值。換成客戶當地的價格或其他貨幣,直接改這個檔再重跑;例如新台幣大約是
+`"currency": "TWD", "symbol": "NT$", "price_per_kwh": 4.5, "gas_per_kwh": 1.5, "film_per_m2_glass": 1200,
+"lighting_per_m2_floor": 600, "coolroof_per_m2_roof": 350`。
 
 ## 也可以用 DesignBuilder 的模型
 

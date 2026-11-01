@@ -1,0 +1,9 @@
+{
+  "currency": "USD",
+  "symbol": "US$",
+  "price_per_kwh": 0.13,
+  "gas_per_kwh": 0.04,
+  "film_per_m2_glass": 40,
+  "lighting_per_m2_floor": 20,
+  "coolroof_per_m2_roof": 12
+}

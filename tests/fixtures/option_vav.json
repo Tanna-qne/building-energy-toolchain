@@ -1,0 +1,7 @@
+{
+  "name": "office_VAV",
+  "width": 30, "depth": 20,
+  "stories": 2,
+  "building_type": "MediumOffice",
+  "hvac": "VAV_Chiller_Boiler"
+}

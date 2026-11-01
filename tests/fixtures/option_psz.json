@@ -1,0 +1,7 @@
+{
+  "name": "office_PSZ",
+  "width": 30, "depth": 20,
+  "stories": 2,
+  "building_type": "MediumOffice",
+  "hvac": "PSZAC_GasCoil"
+}

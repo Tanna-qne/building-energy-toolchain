@@ -16,6 +16,7 @@ MEASURES = {  # 結果裡的代號 -> 白話名稱與一句話說明
     "equip_-20%": ("換節能設備", "電腦、影印機等插座用電減少 20%,例如汰換時選節能標章產品。"),
 }
 GOOD_YEARS, OK_YEARS = 8, 15  # 回本年數的判讀門檻
+TAG_BEST = ' <b class="tag">✓ 最省</b>'
 GAS_UP_WHY = {  # 省電卻多用天然氣時的白話原因
     "lights_-30%": "(燈具發的熱變少,冬天要靠暖氣補回來)",
     "film_shgc0.30": "(冬天照進來的太陽熱也被擋掉,暖氣要多開)",
@@ -57,8 +58,8 @@ def verdict(r):
     """(等級, 圖示, 標籤, 一句話)。等級對應 CSS 的狀態色。"""
     if str(r["success"]) != "True":
         return "skip", "–", "這次沒做", r.get("error") or "模擬沒有成功"
-    twd, years = num(r["saving_twd"]), num(r["payback_years"])
-    if twd is not None and twd <= 0:
+    saved, years = num(r["saving_cost"]), num(r["payback_years"])
+    if saved is not None and saved <= 0:
         return "bad", "✕", "反而多花錢", "做了之後每年的電費加氣費比原本還高。"
     if years is None:
         return "info", "i", "只算了省多少", "沒有這項的施工成本資料,所以算不出幾年回本。"
@@ -69,28 +70,40 @@ def verdict(r):
     return "bad", "✕", "不太划算", f"要 {years:.0f} 年才回本,通常比設備壽命還長。"
 
 
+SYMBOL = "US$"  # write_html() 依 costs.json 設定
+
+
 def money(v):
-    return f"NT$ {v:,.0f}"
+    return f"{SYMBOL} {v:,.0f}"
 
 
 def chart(cards):
-    """每個措施一年省多少錢的橫條圖; 省錢藍色往右、多花錢紅色往左。"""
-    data = [(c["title"], c["twd"]) for c in cards if c["twd"] is not None]
+    """每個措施一年省多少錢; 省錢藍色往右、多花錢紅色往左。"""
+    return bars([(c["title"], c["saved"]) for c in cards if c["saved"] is not None],
+                "每個措施一年省下的錢", signed=True)
+
+
+def bars(data, aria, signed=False):
+    """橫條圖。用 HTML 而不是 SVG: 窄螢幕時 SVG 會整張縮小, 字跟著變得看不清楚。
+    signed: 值有正負(省 / 多花), 標籤加 +/−; 否則只是金額大小。"""
     if not data:
         return ""
-    # 用 HTML 而不是 SVG: 窄螢幕時 SVG 會整張縮小, 字跟著變得看不清楚
     lo, hi = min(0, *(v for _, v in data)), max(0, *(v for _, v in data))
     span = (hi - lo) or 1
     zero = -lo / span * 100  # 0 在長條區的位置(%)
-    out = ['<div class="chart" role="img" aria-label="每個措施一年省下的錢">']
+    out = [f'<div class="chart" role="img" aria-label="{html.escape(aria)}">']
     for name, v in data:
         left, width = (zero, v / span * 100) if v >= 0 else (zero + v / span * 100, -v / span * 100)
-        word = "省" if v >= 0 else "多花"
-        out.append(f'<div class="row" title="{html.escape(name)}:每年{word} {money(abs(v))}">'
+        if signed:
+            tip = f"每年{'省' if v >= 0 else '多花'} {money(abs(v))}"
+            label = f"{'+' if v >= 0 else '−'}{money(abs(v))}"
+        else:
+            tip = label = money(v)
+        out.append(f'<div class="row" title="{html.escape(name)}:{tip}">'
                    f'<span class="lbl">{html.escape(name)}</span>'
                    f'<span class="track"><span class="zero" style="left:{zero:.1f}%"></span>'
                    f'<span class="bar {"pos" if v >= 0 else "neg"}" style="left:{left:.1f}%;width:{max(width, 0.5):.1f}%"></span></span>'
-                   f'<span class="val">{"+" if v >= 0 else "−"}{money(abs(v))}</span></div>')
+                   f'<span class="val">{label}</span></div>')
     out.append("</div>")
     return "\n".join(out)
 
@@ -98,9 +111,9 @@ def chart(cards):
 def model_section(name, rows, costs, meta):
     base = next((r for r in rows if r["case"] == "baseline"), None)
     if not base or str(base["success"]) != "True":
-        return f"<section><h2>{html.escape(name)}</h2><p>基準模擬沒有成功,無法比較:{html.escape(base.get('error', '') if base else '')}</p></section>"
+        return f"<section id=\"{html.escape(name)}\"><h2>{html.escape(name)}</h2><p>基準模擬沒有成功,無法比較:{html.escape(base.get('error', '') if base else '')}</p></section>"
     elec, gas, floor = num(base["elec_kwh"]) or 0, num(base["gas_kwh"]) or 0, num(base["floor_m2"])
-    bill = elec * costs["price_twd_per_kwh"] + gas * costs["gas_twd_per_kwh"]
+    bill = elec * costs["price_per_kwh"] + gas * costs["gas_per_kwh"]
 
     cards = []
     for r in rows:
@@ -108,26 +121,26 @@ def model_section(name, rows, costs, meta):
             continue
         title, what = MEASURES[r["case"]]
         level, icon, label, why = verdict(r)
-        twd, capex, years = num(r["saving_twd"]), num(r["capex_twd"]), num(r["payback_years"])
+        saved, capex, years = num(r["saving_cost"]), num(r["capex_cost"]), num(r["payback_years"])
         s_elec, s_gas = num(r["saving_elec_kwh"]) or 0, num(r["saving_gas_kwh"]) or 0
-        at = []  # 電價變動時的回本年數
-        for p in (6, 8):
-            t = s_elec * p + s_gas * costs["gas_twd_per_kwh"]
+        at = []  # 電價上漲時的回本年數(用相對倍數, 換貨幣也適用)
+        for k in (1.3, 1.8):
+            t = s_elec * costs["price_per_kwh"] * k + s_gas * costs["gas_per_kwh"]
             if capex and t > 0:
-                at.append(f"電價 {p} 元時約 {capex / t:.0f} 年")
+                at.append(f"電價漲 {k - 1:.0%} 時約 {capex / t:.0f} 年")
         cards.append({"case": r["case"], "title": title, "what": what, "level": level, "icon": icon, "label": label, "why": why,
-                      "twd": twd if level != "skip" else None, "capex": capex, "years": years,
+                      "saved": saved if level != "skip" else None, "capex": capex, "years": years,
                       "pct": num(r["saving_pct"]), "s_elec": s_elec, "s_gas": s_gas, "at": at,
                       "note": r.get("error", "") if level != "skip" else ""})
 
     ranked = [c for c in cards if c["level"] in ("good", "ok") and c["years"]]
     best = min(ranked, key=lambda c: c["years"]) if ranked else None
     if best:
-        headline = (f"最划算的是「{best['title']}」:每年省 {money(best['twd'])},"
+        headline = (f"最划算的是「{best['title']}」:每年省 {money(best['saved'])},"
                     f"投資約 {money(best['capex'])},大約 {best['years']:.0f} 年回本。")
     else:
         headline = f"以目前的電價與成本假設,沒有措施能在 {OK_YEARS} 年內回本。"
-        paying = [c for c in cards if c["years"] and c["twd"] and c["twd"] > 0]
+        paying = [c for c in cards if c["years"] and c["saved"] and c["saved"] > 0]
         if paying:
             near = min(paying, key=lambda c: c["years"])
             headline += f"最接近的是「{near['title']}」,約 {near['years']:.0f} 年;電價上漲時會縮短(見下方各項)。"
@@ -139,15 +152,15 @@ def model_section(name, rows, costs, meta):
         desc = (f'{meta.get("stories", 1)} 層、{shape} {meta.get("width")} × {meta.get("depth")} 公尺、'
                 f'{html.escape(BUILDING_NAMES.get(btype, btype))}、{html.escape(hvac_name(meta.get("hvac", "")))}。')
 
-    parts = [f"<section><h2>{html.escape(name)}</h2>",
+    parts = [f'<section id="{html.escape(name)}"><h2>{html.escape(name)}</h2>',
              f'<p class="desc">{desc}樓地板 {floor:,.0f} m²。</p>' if floor else "",
              # 基準的備註目前只有理想負載的換算說明; 這會影響所有數字, 所以放在結論上面
              f'<p class="desc">注意:{html.escape(base["error"])}(設備效率是假設值)。</p>' if base.get("error") else "",
              f'<div class="headline">{html.escape(headline)}</div>',
              "<h3>這棟建築一年用多少能源</h3>",
              '<div class="tiles">',
-             f'<div class="tile"><span class="big">{elec:,.0f}</span> 度電<small>約 {money(elec * costs["price_twd_per_kwh"])}</small></div>',
-             f'<div class="tile"><span class="big">{gas:,.0f}</span> 度天然氣<small>約 {money(gas * costs["gas_twd_per_kwh"])}(主要用在暖氣)</small></div>',
+             f'<div class="tile"><span class="big">{elec:,.0f}</span> 度電<small>約 {money(elec * costs["price_per_kwh"])}</small></div>',
+             f'<div class="tile"><span class="big">{gas:,.0f}</span> 度天然氣<small>約 {money(gas * costs["gas_per_kwh"])}(主要用在暖氣)</small></div>',
              f'<div class="tile"><span class="big">{money(bill)}</span> 一年能源費用</div>',
              f'<div class="tile"><span class="big">{(elec + gas) / floor:,.0f}</span> 度 / m²·年'
              f'<small>每平方公尺一年用多少能源(EUI),越低越省</small></div>' if floor else "",
@@ -178,13 +191,70 @@ def model_section(name, rows, costs, meta):
     return "\n".join(p for p in parts if p)
 
 
+def compare_section(models, costs):
+    """兩個以上方案時放在最前面: 一句話說哪個最省, 費用長條圖, 對照表。"""
+    items = []
+    for name, rs in models.items():
+        base = next((r for r in rs if r["case"] == "baseline" and str(r["success"]) == "True"), None)
+        if not base:
+            continue
+        elec, gas, floor = num(base["elec_kwh"]) or 0, num(base["gas_kwh"]) or 0, num(base["floor_m2"])
+        bill = elec * costs["price_per_kwh"] + gas * costs["gas_per_kwh"]
+        good = []
+        for r in rs:
+            if r["case"] in MEASURES and verdict(r)[0] in ("good", "ok") and num(r["payback_years"]):
+                good.append((num(r["payback_years"]), MEASURES[r["case"]][0]))
+        best = min(good) if good else None
+        items.append({"name": name, "bill": bill, "floor": floor, "per_m2": bill / floor if floor else None,
+                      "eui": (elec + gas) / floor if floor else None,
+                      "best": f"{best[1]}(約 {best[0]:.0f} 年回本)" if best else "沒有 15 年內回本的措施"})
+    if len(items) < 2:
+        return ""
+
+    same_size = len({round(i["floor"] or 0) for i in items}) == 1
+    key = "bill" if same_size else "per_m2"  # 面積不同時用每 m² 費用比才公平
+    lo = min(items, key=lambda i: i[key] or float("inf"))
+    hi = max(items, key=lambda i: i[key] or 0)
+    if same_size:
+        headline = (f"一年能源費用最低的是「{lo['name']}」:{money(lo['bill'])},"
+                    f"比最高的「{hi['name']}」每年少 {money(hi['bill'] - lo['bill'])}"
+                    f"(少 {1 - lo['bill'] / hi['bill']:.0%})。")
+    else:
+        headline = (f"各方案面積不同,用每平方公尺的能源費用比較:最低的是「{lo['name']}」"
+                    f"({SYMBOL} {lo['per_m2']:,.2f}/m²·年),最高的是「{hi['name']}」({SYMBOL} {hi['per_m2']:,.2f}/m²·年)。")
+
+    low_eui = min(items, key=lambda i: i["eui"] or float("inf"))
+    if low_eui is not lo:  # 總能源最少不等於最省錢, 一般人會被這兩個方向相反的數字搞混
+        headline += (f"注意:總能源用得最少的其實是「{low_eui['name']}」(EUI {low_eui['eui']:,.0f}),"
+                     f"但它用電的比例較高,電比天然氣貴,所以費用反而不是最低。")
+
+    rows_html = "".join(
+        f'<tr><td class="m"><a href="#{html.escape(i["name"])}">{html.escape(i["name"])}</a>'
+        f'{TAG_BEST if i is lo else ""}</td>'
+        f'<td>{i["floor"]:,.0f}</td><td>{money(i["bill"])}</td>'
+        f'<td>{SYMBOL} {i["per_m2"]:,.2f}</td><td>{i["eui"]:,.0f}</td><td class="m">{html.escape(i["best"])}</td></tr>'
+        for i in items)
+    return f"""<section><h2>方案比較</h2>
+<div class="headline">{html.escape(headline)}</div>
+<h3>每個方案一年的能源費用</h3>
+{bars([(i["name"], i["bill"]) for i in items], "每個方案一年的能源費用")}
+<h3>對照表</h3>
+<div class="scroll"><table class="cmp"><thead><tr><th class="m">方案</th><th>樓地板 m²</th><th>一年能源費用</th>
+<th>每 m² 費用</th><th>EUI 度/m²·年</th><th class="m">最划算的措施</th></tr></thead><tbody>{rows_html}</tbody></table></div>
+<p class="muted">點方案名稱可以跳到該方案的詳細說明。</p></section>"""
+
+
 def write_html(rows, out_path: Path, costs, meta=None):
     """rows: scan2 的結果列(可含多個模型)。meta: {模型名: 建模參數} 讓報告寫出建築描述。"""
+    global SYMBOL
+    SYMBOL = costs.get("symbol", costs["currency"])
+    sym = SYMBOL + " "
     meta = meta or {}
     models = {}
     for r in rows:
         models.setdefault(r["model"], []).append({k: ("" if v is None else v) for k, v in r.items()})
-    sections = "\n".join(model_section(n, rs, costs, meta.get(n)) for n, rs in models.items())
+    sections = compare_section(models, costs) + "\n".join(
+        model_section(n, rs, costs, meta.get(n)) for n, rs in models.items())
     doc = f"""<!doctype html>
 <html lang="zh-Hant"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -221,6 +291,10 @@ h1{{font-size:24px;margin:0 0 4px}} h2{{font-size:20px;margin:36px 0 6px}} h3{{f
 .badge.good i{{background:var(--good)}} .badge.ok i{{background:var(--warn);color:#0b0b0b}} .badge.bad i{{background:var(--bad)}}
 .badge.info i{{background:var(--info)}} .badge.skip i{{background:var(--skip)}}
 .notes{{color:var(--ink2);font-size:14px}} .notes li{{margin:4px 0}}
+.scroll{{overflow-x:auto}} table.cmp{{border-collapse:collapse;width:100%;background:var(--surface);font-size:14px}}
+table.cmp th,table.cmp td{{border:1px solid var(--line);padding:6px 10px;text-align:right;white-space:nowrap}}
+table.cmp th{{color:var(--ink2);font-weight:600}} table.cmp .m{{text-align:left}} table.cmp a{{color:var(--pos)}}
+.tag{{font-size:12px;border:1px solid var(--good);color:var(--ink);border-radius:999px;padding:0 8px;margin-left:6px}}
 </style></head><body><main>
 <h1>節能評估報告</h1>
 <p class="muted">EnergyPlus 模擬一整年的結果。先看每棟建築最上面那句結論,再看各項措施的說明。</p>
@@ -228,9 +302,9 @@ h1{{font-size:24px;margin:0 0 4px}} h2{{font-size:20px;margin:36px 0 6px}} h3{{f
 <h2>這些數字怎麼來的</h2>
 <ul class="notes">
 <li>用電腦模擬這棟建築一整年每小時的用電與用氣(EnergyPlus),再分別套用每個措施重算一次,比較差多少。</li>
-<li>價格假設:電 {costs["price_twd_per_kwh"]:g} 元/度、天然氣 {costs["gas_twd_per_kwh"]:g} 元/度;
- 貼膜 {costs["film_twd_per_m2_glass"]:,} 元/m² 玻璃、換燈具 {costs["lighting_twd_per_m2_floor"]:,} 元/m² 樓地板、
- 屋頂反射漆 {costs.get("coolroof_twd_per_m2_roof", 0):,} 元/m² 屋頂。都是估計值,不是報價。
+<li>價格假設({costs["currency"]}):電 {sym}{costs["price_per_kwh"]:g}/度、天然氣 {sym}{costs["gas_per_kwh"]:g}/度;
+ 貼膜 {sym}{costs["film_per_m2_glass"]:,}/m² 玻璃、換燈具 {sym}{costs["lighting_per_m2_floor"]:,}/m² 樓地板、
+ 屋頂反射漆 {sym}{costs["coolroof_per_m2_roof"]:,}/m² 屋頂。都是估計值,不是報價,改 costs.json 就會換。
  氣密與節能設備沒有成本資料,只算省多少。</li>
 <li>回本年數 = 投資 ÷ 每年省的錢。沒有算利息、維修與設備壽命。
  判讀:{GOOD_YEARS} 年內「值得考慮」、{GOOD_YEARS}–{OK_YEARS} 年「看情況」、超過 {OK_YEARS} 年「不太划算」。</li>
