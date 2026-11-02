@@ -188,13 +188,27 @@ def mcp_retrofit(client, tool, src: Path, out_path: Path):
     return (out_path if data.get("success") and changes and out_path.exists() else None), changes
 
 
+def hvac_label(kind):
+    if kind.startswith("CHILLER") or kind == "HVACTEMPLATE:PLANT:CHILLER":
+        return "冰水主機 COP"
+    if "DX" in kind:
+        return "冷氣 COP"
+    if "BOILER" in kind:
+        return "鍋爐效率"
+    if kind == "COIL:HEATING:FUEL":
+        return "瓦斯加熱效率"
+    return "風扇效率"
+
+
 def retrofit_measures(client, name, src: Path, base, models_dir: Path):
     """沒有參數變體的模型(DesignBuilder / 範例)用 MCP 工具做加強隔熱與高效率空調。回傳 [(措施, 結果, 說明)]。"""
     out = []
     path, ch = mcp_retrofit(client, "upgrade_insulation", src, models_dir / f"{name}__insul.idf")
     if path:
-        label = {"wall": "外牆", "roof": "屋頂"}
-        note = "、".join(f"{label[c['type']]} U {c['u_old']:.2f} → {c['u_new']:.2f}" for c in ch[:2]) + \
+        label, first = {"wall": "外牆", "roof": "屋頂"}, {}
+        for c in ch:  # 同類可能有好幾種構造, 每類只列第一個
+            first.setdefault(c["type"], c)
+        note = "、".join(f"{label[t]} U {c['u_old']:.2f} → {c['u_new']:.2f}" for t, c in first.items()) + \
             " W/m²K(在原構造加一層保溫)"
         out.append(("insulation", run(client, path), note))
     else:
@@ -203,10 +217,9 @@ def retrofit_measures(client, name, src: Path, base, models_dir: Path):
     path, ch = mcp_retrofit(client, "upgrade_hvac_efficiency", src, models_dir / f"{name}__hvac.idf")
     if path:
         seen = {}
-        for c in ch:
-            seen.setdefault(c["field"], c)
-        note = "、".join(f"{c['object'].split(':')[-1].title()} {c['field'].replace('_', ' ')} {c['old']:g} → {c['new']:g}"
-                        for c in seen.values())
+        for c in ch:  # 用和參數模型一樣的白話名稱, 每類只列第一個
+            seen.setdefault(hvac_label(c["object"]), c)
+        note = "、".join(f"{k} {c['old']:.2f} → {c['new']:.2f}" for k, c in seen.items())
         out.append(("hvac_eff", run(client, path), note))
     elif base.get("success") and (base.get("cool_dist") or base.get("heat_dist")):
         # 理想負載沒有實際設備: 換算用的冷氣 COP 與鍋爐效率提高, 不必另跑模擬
