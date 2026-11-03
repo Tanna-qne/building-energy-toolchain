@@ -47,7 +47,10 @@
   - `PSZAC_GasCoil`:箱型冷氣加瓦斯
   - `PTAC_ElectricBaseboard`:窗型冷氣加電暖器
 - **常用的 building_type**:`MediumOffice`、`SmallOffice`、`Retail`、`SmallHotel`、`PrimarySchool`。
-- **氣象檔固定是 Chicago**:`climate_zone` 只影響構造的保溫規範,不會換掉天氣。使用者提到別的城市時,要先跟他說明這一點。
+- **氣象檔預設是 Chicago**:`climate_zone` 只影響構造的保溫規範,不會換掉天氣。
+  - 跑 DB 或現成的 IDF 時,先設環境變數 `EPW=<.epw 完整路徑>` 再執行,就能換城市。
+    E+ 自帶的氣象檔在 `…\EnergyPlus-26.2.0-…\WeatherData\`,有 Chicago、San Francisco、Golden、Tampa、Washington Dulles。
+  - 參數建模的設計日仍固定 Chicago。使用者提到別的城市時,要先跟他說明這一點。
 
 ## 4. 怎麼向使用者回報
 
@@ -91,7 +94,33 @@
    - MCP 回空白錯誤時,原因通常在 `.experr`。
 5. **改過 MCP 的 venv(`uv sync`)之後**,要重跑 `vendor/EnergyPlus-MCP/energyplus-mcp-server` 底下的 `apply_windows_patches.py`。
 
-## 6. 規矩
+## 6. 真實項目:PNNL 醫院原型模型(已跑通)
+
+使用者在練真實項目,第一個是 DOE / PNNL 的 Hospital、ASHRAE 90.1-2022 Appendix G,Baseline 對 Proposed。
+
+- **來源**:https://www.energycodes.gov/prototype-building-models(Table 2 的 Hospital「2022 Baseline」「2022 Proposed」)。
+  該網站會擋命令列下載(curl 只會拿到 "Request Rejected"),要用瀏覽器下載,檔案會存在 `~/Downloads`。不要偽裝 User-Agent 去繞過。
+- **本機位置**:
+  - 原始檔(19 個城市的 `.idf`,加上官方的 `.table.htm` 結果)在 `db_models/hospital/src/`。這個資料夾已列在 `.gitignore`,不要 commit。
+  - 實際跑的是 `db_models/hospital/run/` 裡 Tampa 的兩個檔。
+- **執行方式**:
+  ```
+  $env:EPW = "C:\Users\kiri\AppData\Local\Programs\EnergyPlusV26-2-0\EnergyPlus-26.2.0-4bd7a1f26f-Windows-x86_64\WeatherData\USA_FL_Tampa.Intl.AP.722110_TMY3.epw"
+  python db_import.py db_models/hospital/run
+  ```
+  - 會自動從 22.1 升級到 26.2。兩個模型加上全部措施,約 25 分鐘。
+- **驗證結果**:2026-11-02 跑的結果和官方 `.htm` 的 Total End Uses 比,電差 0.2–0.5%,天然氣差 0.5–1.5%,樓地板 22,436 m² 一致。
+  殘差來自兩個地方:官方用的是 Tampa MacDill 氣象站,我們用的是 Tampa Intl;再加上版本從 22.1 換到 26.2。
+  - 官方數字:Baseline 電 7,023,472 kWh、天然氣 2,470,478 kWh;Proposed 電 5,277,272 kWh、天然氣 1,283,103 kWh。
+  - 換其他城市時,也要用同樣方法和官方 `.htm` 比對,誤差在幾 % 內才算模型跑對。
+- **結論重點**:
+  - Proposed 比 Baseline 省 31%。
+  - Baseline 最划算的是換燈具(約 7 年回本)和屋頂反射漆(約 9 年回本)。
+  - 醫院是內部負載主導,加強隔熱幾乎沒有效果;原窗 SHGC 只有 0.22–0.25,貼膜會自動略過。
+- **下一步**(使用者還沒做):從官方 `.htm` 的分項耗能(冷氣、風扇、照明、熱水)解釋那 31% 是從哪裡省下來的。
+  這是使用者自己練習的部分。他問的時候,你帶他看數字就好,不要直接替他寫完。
+
+## 7. 規矩
 
 - **不要改** `~/.dsh/profiles/desktop/cordis.yml`;要改設定只改 `cordis.patch.yml`,新增 MCP 要寫在 `insert:` 底下。
 - **不要自己重寫模擬邏輯**。措施、換算、報告都已經有了。少了功能,先問使用者,再找現成的開源專案。
