@@ -21,6 +21,7 @@
 |---|---|
 | 「幫我算一棟 40×25、3 層的辦公室」 | 寫一個參數 json(§3)→ `python run_building.py 那個.json` |
 | 「比較 VAV 和箱型冷氣」「3 層和 5 層哪個好」 | 每個方案寫一個 json,`name` 不同 → `python run_building.py A.json B.json` |
+| 「DB 跑完沒出報告」 | 看 `db_models/from_db/<模型名>/run.log`。DB 端的 script 是 `tools/designbuilder/AfterSimReport.cs`(README「也可以用 DesignBuilder 的模型」) |
 | 「這是 DB 匯出的檔案」 | 放到一個**新的空資料夾**,然後執行 `python db_import.py 那個資料夾`(見 §5 坑 1) |
 | 「改成新台幣」「電價是 0.2」 | 改根目錄的 `costs.json`,再重跑。README 有新台幣的範例值 |
 | 「電價漲了還划算嗎」 | 報告裡已經有電價漲 30% 和 80% 的回本年數;要畫整條曲線,就跑 `python sensitivity.py`(只吃範例模型) |

@@ -1,6 +1,6 @@
 # 交接文件:建築能耗模擬工具鏈
 
-最後更新:2026-10-30(Claude 接手後修正,變更見 §15)· 原交接日 2026-10-27
+最後更新:2026-11-05(DSH 實測後修正「DB 不能模擬」結論,見 §4.1)· 原交接日 2026-10-27
 
 ---
 
@@ -9,8 +9,8 @@
 在 Windows 上把 **EnergyPlus 26.2 + LBNL 官方 MCP server** 接進 DeepSeek Harness,
 並用它在 5–11 個範例模型上跑了三輪模擬(批量、措施掃描、成本回收期),產出一份公開的靜態網頁報告。
 
-**DesignBuilder 目前不能跑模擬**(安裝缺引擎)。替代路線是 DB 匯出 IDF,丟給 `db_import.py`
-自動升版、補電表、跑全部措施(§4.2)。
+**DesignBuilder 可以模擬**(2026-11-05 實測成功,入口見 §4.1)。DB 匯出 IDF 給 `db_import.py`
+跑「措施效益與回收期」仍是另一條可用路線(§4.2)。
 
 ---
 
@@ -25,7 +25,7 @@
 | 措施掃描(5×4) | ✅ 20/20 成功 | 333 秒,含天然氣 |
 | 組合 + 回收期(5×5) | ✅ 25/25 成功 | 平行 4 個 MCP,150 秒 |
 | 敏感度 + 網頁報告 | ✅ 已上線 | GitHub Pages |
-| DesignBuilder 模擬 | ❌ 不可用 | 缺 EnergyPlus 引擎(§4.1) |
+| DesignBuilder 模擬 | ✅ 可用 | 2026-11-05 實測成功;E+ 23.1 DLL 版,入口 Simulation→Update data(§4.1) |
 | DB IDF 匯入(`db_import.py`) | ✅ 已驗證 | 2026-10-31 用 DB 2025.1 實際匯出的 IDF(23.1 版、理想負載)跑通,已列入 `tests/smoke.py` |
 
 ---
@@ -67,18 +67,24 @@ IDF 模型 ──> EnergyPlus-MCP(stdio JSON-RPC)──> EnergyPlus 26.2 ──>
 
 ## 4. 兩個外部軟體的狀況
 
-### 4.1 DesignBuilder:裝了但不能模擬
+### 4.1 DesignBuilder:可以模擬(2026-11-05 實測)
 
 - 版本 **2025.1.1**(`C:\Program Files (x86)\DesignBuilder`)。
-- 授權正常:診斷日誌顯示 `Licence (Evaluation) for EP` 有效到 **2026-11-23**
-  (EP = EnergyPlus),授權檔在 `C:\ProgramData\DesignBuilder\Licences`。
-- **但引擎檔案缺失**:`DesignBuilder\EnergyPlus\` 只有一個 164 KB 的
-  `DesignBuilderEnergyPlus.exe`(模擬管理程式),沒有 `energyplus.exe`、沒有 `Energy+.idd`。
-  整機(Program Files / ProgramData / AppData / 登錄表 / `Lib\`)都找不到引擎。
-  程式內寫死的路徑是 `...\Lib\EnergyPlus\DesignBuilderEnergyPlus.exe`,所以引擎本來該在那。
-- **結論**:DB 的 Simulation 按鈕大概率無法用。要修只能重裝 DB 並把 EnergyPlus 一起裝上。
+- 授權正常:`Licence (Evaluation) for EP` 有效到 **2026-11-23**,授權檔在 `C:\ProgramData\DesignBuilder\Licences`。
+- **引擎是 E+ 23.1 的 DLL 版,不是 exe**:`DesignBuilder\EnergyPlus\` 只有 164 KB 的
+  `DesignBuilderEnergyPlus.exe`(模擬管理程式),真正引擎在
+  `C:\ProgramData\DesignBuilder\JobServer\versions\DLL23.1.0.002-64.zip`(`energyplusapi.dll`、`Energy+.idd`、`RunEpDLL.exe`)。
+  用 `DBEPGetVersion.exe` 對 DB 匯出的 IDF 解析會回 `23.1.0.002`,exit 0。之前以為「缺 energyplus.exe = 不能跑」是誤判。
+- **模擬入口**:Learning mode 開著時計算標籤會搬到畫面下方,所以上方只剩資料標籤(Layout…CFD)。
+  關掉 Learning mode(Tools → Program Options)後標籤變成
+  `Edit | Visualise | Heating design | Cooling design | Simulation | CFD | Daylighting | Cost and Carbon`;
+  切到 **Simulation → 左上 `Update data`** → 缺氣象檔會問(可線上下載)→ 自動算完出年度曲線。
+  2026-11-05 16:37 用 Model Geometry Example + San Francisco 氣象跑通。
+- **結果存在 .dsb 內**:跑完 `DBJobServer.db` 的 `job_instances` 仍是 0(DB 內跑不經 JobServer);
+  autosave 的 `.dsb` 從 8.14 MB → 8.59 MB。`.dsb` 是 ZIP,內含單一 `~<name>.skh`(自訂二進位,外部讀不動)。
+- 需求校正與「DB 助手」路線見 `handover/DB-ASSISTANT.md`。
 
-### 4.2 替代路線(目前唯一可行的 DB 用法)
+### 4.2 另一條路:DB 匯出 IDF,交給外部工具做「措施效益與回收期」(投資分析用)
 
 DB 建模 → **匯出 IDF**(工具列的 **Export IDF model** 按鈕;File → Export 選單裡沒有 IDF。不需要引擎,
 預設存到 `文件\DesignBuilder Data\`)→ 放進 `db_models\inbox\` →
@@ -307,7 +313,7 @@ Pages 狀態 `built`,已實測回 200。
 
 1. ~~用真正 DB 匯出的 IDF 跑 `db_import.py`~~:2026-10-31 完成。
 2. ~~DSH 對話內沒有載入任何 MCP~~:2026-10-31 解決,原因是 patch 沒用 `insert:`(§5.3)。
-3. **修 DB 模擬**(可選):重裝 DB 時把 EnergyPlus 一起裝,或繼續用外部 E+ 取代。
+3. ~~修 DB 模擬~~:2026-11-05 解決,DB 本來就能模擬,入口是 Simulation→Update data(§4.1)。
 4. **真實空調系統**:目前掃描用的是範例模型自帶系統;若要算電費與碳排,
    應換成 PTAC/VAV 等真實系統並加電價、碳排係數。
 5. **版本對齊**(低優先):MCP 上游預設 E+ 26.1,本機是 26.2,目前沒問題但屬未驗證區。

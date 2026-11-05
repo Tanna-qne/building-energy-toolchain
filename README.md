@@ -74,6 +74,15 @@
 
 ## 也可以用 DesignBuilder 的模型
 
+**最省事:DB 模擬跑完自動出報告**(設一次就好):
+
+1. DB 工具列 **Scripts**(或 Tools → Scripts)打開 Script Manager,新增一個 C# script,
+   把 `tools/designbuilder/AfterSimReport.cs` 整個貼進去,勾選啟用。
+2. 之後照常在 **Simulation → Update data** 跑模擬。跑完約 3–10 分鐘,瀏覽器會自動打開節能措施報告
+   (用和 DB 同一個氣象檔)。結果在 `db_models/from_db/<模型名>/`,出錯看同資料夾的 `run.log`。
+
+**手動匯出**:
+
 1. 在 DB 開啟模型,按工具列上的 **Export IDF model** 按鈕(File → Export 選單裡沒有 IDF)。
    檔案預設存到 `文件\DesignBuilder Data\`。
 2. 把它複製到 `db_models/inbox/`,執行 `python db_import.py`,結果一樣在 `db_models/out/report.html`。
