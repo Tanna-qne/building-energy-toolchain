@@ -45,8 +45,8 @@ def glazing(output_dir: Path):
     table = next(output_dir.glob("*Table.htm"), None)
     text = table.read_text(encoding="latin-1") if table else ""
     i = text.find("<b>Exterior Fenestration</b>")
-    if i < 0 or "Glass U-Factor [W/m2-K]" not in text[i:i + 5000]:
-        # DesignBuilder 匯出的模型常只開少數報表、而且用英制單位; 改讀 .eio 的 WindowConstruction(一律 SI,
+    if i < 0:
+        # DesignBuilder 手動匯出的模型常沒開這張報表; 改讀 .eio 的 WindowConstruction(一律 SI,
         # 數值與報表的 Glass U-Factor / SHGC 相同)。多種構造時取平均, 因為 .eio 沒有各自的面積
         return glazing_from_eio(output_dir)
     block = text[i:text.find("</table>", i)]
@@ -54,12 +54,14 @@ def glazing(output_dir: Path):
             for r in re.findall(r"<tr>(.*?)</tr>", block, re.S)]
     head = rows[0]
     total = next((r for r in rows[1:] if r and r[0] == "Total or Average"), None)
+    # DB 模擬時的報表是英制(DB 內跑模擬產生的 IDF 有這張表、卻沒有 Output:Constructions, .eio 讀不到)
+    u_col, u_factor = ("Glass U-Factor [W/m2-K]", 1.0) if "Glass U-Factor [W/m2-K]" in head else \
+        ("Glass U-Factor [Btu/h-ft2-F]", 5.678263)
     try:
-        u, shgc, vt = (float(total[head.index(k)]) for k in
-                       ("Glass U-Factor [W/m2-K]", "Glass SHGC", "Glass Visible Transmittance"))
+        u, shgc, vt = (float(total[head.index(k)]) for k in (u_col, "Glass SHGC", "Glass Visible Transmittance"))
     except (TypeError, ValueError):
-        return None
-    return u, shgc, vt
+        return glazing_from_eio(output_dir)
+    return round(u * u_factor, 3), shgc, vt
 
 
 def glazing_from_eio(output_dir: Path):
