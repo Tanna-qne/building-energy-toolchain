@@ -81,6 +81,11 @@
 2. 之後照常在 **Simulation → Update data** 跑模擬。跑完約 3–10 分鐘,瀏覽器會自動打開節能措施報告
    (用和 DB 同一個氣象檔)。結果在 `db_models/from_db/<模型名>/`,出錯看同資料夾的 `run.log`。
 
+**讓 agent 直接操作 DB**:`tools/designbuilder_mcp/` 是一個 MCP server(DSH 裡叫 `designbuilder`),
+可以讀模型、改屬性、用 DB 跑模擬、算節能措施、由參數建 DB 模型。工具清單與注意事項見 `handover/HARNESS.md` §7。
+安裝:`uv venv tools/designbuilder_mcp/.venv --python 3.12`,再
+`uv pip install --python tools/designbuilder_mcp/.venv/Scripts/python.exe -r tools/designbuilder_mcp/requirements.txt`。
+
 **手動匯出**:
 
 1. 在 DB 開啟模型,按工具列上的 **Export IDF model** 按鈕(File → Export 選單裡沒有 IDF)。

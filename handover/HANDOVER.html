@@ -1,11 +1,11 @@
 <!doctype html><html lang=zh-Hant><head><meta charset=utf-8><style>@page{size:A4;margin:16mm 14mm}body{font-family:Microsoft JhengHei,system-ui,sans-serif;font-size:10.5pt;line-height:1.6;color:#111}h1{font-size:20pt;border-bottom:2px solid #111;padding-bottom:6px}h2{font-size:14pt;margin-top:20px;border-bottom:1px solid #ddd;padding-bottom:3px}h3{font-size:12pt;margin-top:14px}code{background:#f3f4f6;padding:1px 4px;border-radius:3px;font-family:Consolas,monospace;font-size:9pt}pre{background:#f8fafc;border:1px solid #e5e7eb;padding:8px 10px;white-space:pre-wrap;font-family:Consolas,monospace;font-size:8.5pt;line-height:1.45}table{border-collapse:collapse;width:100%;margin:8px 0;font-size:9pt}th,td{border:1px solid #d1d5db;padding:4px 6px;text-align:left;vertical-align:top}th{background:#f3f4f6}ul{margin:6px 0 6px 18px;padding:0}hr{border:0;border-top:1px solid #ddd;margin:14px 0}</style></head><body><h1>交接文件:建築能耗模擬工具鏈</h1>
-<p>最後更新:2026-10-30(Claude 接手後修正,變更見 §15)· 原交接日 2026-10-27</p>
+<p>最後更新:2026-11-05(DSH 實測後修正「DB 不能模擬」結論,見 §4.1)· 原交接日 2026-10-27</p>
 <hr>
 <h2>0. 一句話總結</h2>
 <p>在 Windows 上把 <strong>EnergyPlus 26.2 + LBNL 官方 MCP server</strong> 接進 DeepSeek Harness,</p>
 <p>並用它在 5–11 個範例模型上跑了三輪模擬(批量、措施掃描、成本回收期),產出一份公開的靜態網頁報告。</p>
-<p><strong>DesignBuilder 目前不能跑模擬</strong>(安裝缺引擎)。替代路線是 DB 匯出 IDF,丟給 <code>db_import.py</code></p>
-<p>自動升版、補電表、跑全部措施(§4.2)。</p>
+<p><strong>DesignBuilder 可以模擬</strong>(2026-11-05 實測成功,入口見 §4.1)。DB 匯出 IDF 給 <code>db_import.py</code></p>
+<p>跑「措施效益與回收期」仍是另一條可用路線(§4.2)。</p>
 <hr>
 <h2>1. 目前狀態</h2>
 <table>
@@ -17,7 +17,7 @@
 <tr><td>措施掃描(5×4)</td><td>✅ 20/20 成功</td><td>333 秒,含天然氣</td></tr>
 <tr><td>組合 + 回收期(5×5)</td><td>✅ 25/25 成功</td><td>平行 4 個 MCP,150 秒</td></tr>
 <tr><td>敏感度 + 網頁報告</td><td>✅ 已上線</td><td>GitHub Pages</td></tr>
-<tr><td>DesignBuilder 模擬</td><td>❌ 不可用</td><td>缺 EnergyPlus 引擎(§4.1)</td></tr>
+<tr><td>DesignBuilder 模擬</td><td>✅ 可用</td><td>2026-11-05 實測成功;E+ 23.1 DLL 版,入口 Simulation→Update data(§4.1)</td></tr>
 <tr><td>DB IDF 匯入(<code>db_import.py</code>)</td><td>✅ 已驗證</td><td>2026-10-31 用 DB 2025.1 實際匯出的 IDF(23.1 版、理想負載)跑通,已列入 <code>tests/smoke.py</code></td></tr>
 </table>
 <hr>
@@ -51,22 +51,30 @@ IDF 模型 ──&gt; EnergyPlus-MCP(stdio JSON-RPC)──&gt; EnergyPlus 26.2 �
 <p>唯一例外是 IDF 版本升級:MCP 沒有這個工具,<code>db_import.py</code> 直接呼叫 E+ 自帶的 Transition 程式。</p>
 <hr>
 <h2>4. 兩個外部軟體的狀況</h2>
-<h3>4.1 DesignBuilder:裝了但不能模擬</h3>
+<h3>4.1 DesignBuilder:可以模擬(2026-11-05 實測)</h3>
 <ul>
 <li>版本 <strong>2025.1.1</strong>(<code>C:\Program Files (x86)\DesignBuilder</code>)。</li>
-<li>授權正常:診斷日誌顯示 <code>Licence (Evaluation) for EP</code> 有效到 <strong>2026-11-23</strong></li>
+<li>授權正常:<code>Licence (Evaluation) for EP</code> 有效到 <strong>2026-11-23</strong>,授權檔在 <code>C:\ProgramData\DesignBuilder\Licences</code>。</li>
+<li><strong>引擎是 E+ 23.1 的 DLL 版,不是 exe</strong>:<code>DesignBuilder\EnergyPlus\</code> 只有 164 KB 的</li>
 </ul>
-<p>(EP = EnergyPlus),授權檔在 <code>C:\ProgramData\DesignBuilder\Licences</code>。</p>
+<p><code>DesignBuilderEnergyPlus.exe</code>(模擬管理程式),真正引擎在</p>
+<p><code>C:\ProgramData\DesignBuilder\JobServer\versions\DLL23.1.0.002-64.zip</code>(<code>energyplusapi.dll</code>、<code>Energy+.idd</code>、<code>RunEpDLL.exe</code>)。</p>
+<p>用 <code>DBEPGetVersion.exe</code> 對 DB 匯出的 IDF 解析會回 <code>23.1.0.002</code>,exit 0。之前以為「缺 energyplus.exe = 不能跑」是誤判。</p>
 <ul>
-<li><strong>但引擎檔案缺失</strong>:<code>DesignBuilder\EnergyPlus\</code> 只有一個 164 KB 的</li>
+<li><strong>模擬入口</strong>:Learning mode 開著時計算標籤會搬到畫面下方,所以上方只剩資料標籤(Layout…CFD)。</li>
 </ul>
-<p><code>DesignBuilderEnergyPlus.exe</code>(模擬管理程式),沒有 <code>energyplus.exe</code>、沒有 <code>Energy+.idd</code>。</p>
-<p>整機(Program Files / ProgramData / AppData / 登錄表 / <code>Lib\</code>)都找不到引擎。</p>
-<p>程式內寫死的路徑是 <code>...\Lib\EnergyPlus\DesignBuilderEnergyPlus.exe</code>,所以引擎本來該在那。</p>
+<p>關掉 Learning mode(Tools → Program Options)後標籤變成</p>
+<p><code>Edit | Visualise | Heating design | Cooling design | Simulation | CFD | Daylighting | Cost and Carbon</code>;</p>
+<p>切到 <strong>Simulation → 左上 <code>Update data</code></strong> → 缺氣象檔會問(可線上下載)→ 自動算完出年度曲線。</p>
+<p>2026-11-05 16:37 用 Model Geometry Example + San Francisco 氣象跑通。</p>
 <ul>
-<li><strong>結論</strong>:DB 的 Simulation 按鈕大概率無法用。要修只能重裝 DB 並把 EnergyPlus 一起裝上。</li>
+<li><strong>結果存在 .dsb 內</strong>:跑完 <code>DBJobServer.db</code> 的 <code>job_instances</code> 仍是 0(DB 內跑不經 JobServer);</li>
 </ul>
-<h3>4.2 替代路線(目前唯一可行的 DB 用法)</h3>
+<p>autosave 的 <code>.dsb</code> 從 8.14 MB → 8.59 MB。<code>.dsb</code> 是 ZIP,內含單一 <code>~&lt;name&gt;.skh</code>(自訂二進位,外部讀不動)。</p>
+<ul>
+<li>需求校正與「DB 助手」路線見 <code>handover/DB-ASSISTANT.md</code>。</li>
+</ul>
+<h3>4.2 另一條路:DB 匯出 IDF,交給外部工具做「措施效益與回收期」(投資分析用)</h3>
 <p>DB 建模 → <strong>匯出 IDF</strong>(工具列的 <strong>Export IDF model</strong> 按鈕;File → Export 選單裡沒有 IDF。不需要引擎,</p>
 <p>預設存到 <code>文件\DesignBuilder Data\</code>)→ 放進 <code>db_models\inbox\</code> →</p>
 <p><code>python db_import.py</code>。結果在 <code>db_models/out/report.md</code>,中間檔在 <code>db_models/work/</code>。</p>
@@ -244,11 +252,16 @@ cd vendor/EnergyPlus-MCP/energyplus-mcp-server
 <p>17. <strong>Ladybug Tools 會在 <code>HOME</code> / <code>APPDATA</code> 建資料夾</strong>,sandbox 下會 <code>WinError 5</code>;<code>build_idf.py</code> 把兩者指到 <code>tools/modeler/home/</code>。</p>
 <p>18. <strong>由 <code>tools/modeler/.venv</code> 的 Python 帶起的 E+ Transition 程式會當掉</strong>(gfortran backtrace,環境變數與 PATH 完全相同也一樣,</p>
 <p>在 Claude 的 sandbox 下觀察到)。所以 <code>run_building.py</code> 用主 Python 當父程序:先呼叫 venv 建模、建完結束,再自己跑 <code>db_import</code>。</p>
+<p>2026-11-13 進一步確認:只要祖先程序裡有 venv 的 <code>python.exe</code> 啟動器就會當(孫程序也一樣),用基底 Python 3.12 就正常。</p>
+<p>所以 DesignBuilder MCP 用基底 <code>Python312\python.exe</code> 執行,套件用 <code>site.addsitedir</code> 從 <code>.venv</code> 載入。</p>
+<p>19. <strong>這台的 DesignBuilder 設成「以系統管理員身分執行」</strong>(HKCU 相容性旗標 <code>RUNASADMIN</code>)。<code>subprocess</code> 直接啟動會 WinError 740;</p>
+<p>要用 <code>Start-Process</code>,而且每次都跳 UAC 確認視窗、要使用者按「是」;DB 做完 <code>/process=</code> 後若沒自己關,一般權限關不掉。</p>
+<p>使用者選擇保留這個設定(2026-11-13)。不要自行修改。</p>
 <hr>
 <h2>9. 待辦(依優先序)</h2>
 <p>1. ~~用真正 DB 匯出的 IDF 跑 <code>db_import.py</code>~~:2026-10-31 完成。</p>
 <p>2. ~~DSH 對話內沒有載入任何 MCP~~:2026-10-31 解決,原因是 patch 沒用 <code>insert:</code>(§5.3)。</p>
-<p>3. <strong>修 DB 模擬</strong>(可選):重裝 DB 時把 EnergyPlus 一起裝,或繼續用外部 E+ 取代。</p>
+<p>3. ~~修 DB 模擬~~:2026-11-05 解決,DB 本來就能模擬,入口是 Simulation→Update data(§4.1)。</p>
 <p>4. <strong>真實空調系統</strong>:目前掃描用的是範例模型自帶系統;若要算電費與碳排,</p>
 <p>應換成 PTAC/VAV 等真實系統並加電價、碳排係數。</p>
 <p>5. <strong>版本對齊</strong>(低優先):MCP 上游預設 E+ 26.1,本機是 26.2,目前沒問題但屬未驗證區。</p>
@@ -400,7 +413,10 @@ handover/
 <li><code>build_idf.validate()</code>:欄位拼錯(原本會被默默忽略)、L 形缺尺寸、型別或範圍錯、非英文 name、JSON 格式錯,都改成一行說明。</li>
 <li>參數建模的 IDF 改放 <code>db_models/built/</code>,<code>inbox/</code> 只留 DB 匯出檔(原本 <code>db_import.py</code> 不帶參數會把所有建過的模型重跑)。</li>
 <li>報告:回本超過 50 年改印「超過 50 年」;天然氣標示改成「暖氣、熱水」(電暖器建築的天然氣其實是熱水)。</li>
+<li>DesignBuilder MCP(<code>tools/designbuilder_mcp/</code>,DSH 的 <code>mcp-designbuilder</code>):把 DB 官方的 db-process(命令列 <code>/process=</code>)、</li>
 </ul>
+<p>Ladybug Tools 的 honeybee-designbuilder(參數 → dsbXML)和現有的節能分析包成 8 個工具;用法見 <code>handover/HARNESS.md</code> §7。</p>
+<p>2026-11-13 端到端實測:建模、讀模型、改屬性跑 DB 模擬(滲風 0.7 → 0.35,EUI 141.0 → 133.7)、節能報告都通;<code>db_calculate</code> 未實測。</p>
 <p><strong>驗證方式</strong>:重構後 <code>scan2</code> 依序與平行兩種跑法,和修改前逐筆比對結果一致;<code>db_import</code> 用 25.1 舊版 IDF</p>
 <p>與中文檔名實測,數字和 26.2 範例完全相同。各檔修改前的版本留在旁邊的 <code>*.bak-20261029</code></p>
 <p>(<code>report/</code> 的在 <code>_bak-20261029/report/</code>)。</p></body></html>

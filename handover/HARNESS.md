@@ -121,7 +121,34 @@
 - **下一步**(使用者還沒做):從官方 `.htm` 的分項耗能(冷氣、風扇、照明、熱水)解釋那 31% 是從哪裡省下來的。
   這是使用者自己練習的部分。他問的時候,你帶他看數字就好,不要直接替他寫完。
 
-## 7. 規矩
+## 7. 直接操作 DesignBuilder(`mcp__designbuilder__*`)
+
+使用者想在 DB 裡做事(讀模型、改設定、跑模擬、算節能)時，用這組工具。
+它們是把 DesignBuilder 官方的命令列(db-process)包成 MCP,程式在 `tools/designbuilder_mcp/server.py`。
+
+| 工具 | 做什麼 | 要開 DB 嗎 |
+|---|---|---|
+| `db_status` | DB 有沒有在跑 | 否 |
+| `db_create_model` | 參數(同 §3)→ DB 模型(dsbXML)。叫使用者用 File > Import > Import model from XML 匯入，或用 `db_open` 打開 | 否 |
+| `db_inspect` | 讀 .dsb:區塊、zone、建築屬性。`attribute_filter` 可以搜尋屬性名稱 | 第一次要(之後用快取) |
+| `db_simulate` | 用 DB 本身跑 EnergyPlus。可先改屬性，例如 `{"InfiltrationValue": 0.35}` | 要 |
+| `db_measures_report` → `db_report_status` | 對 `db_simulate` 的結果跑 8 種措施和回本。在背景跑約 5 分鐘，每 30 秒左右查一次 | 否 |
+| `db_calculate` | 冷暖房設計負載 / 採光 / CFD,結果存在模型副本裡 | 要(**還沒實測過**) |
+| `db_open` | 在 DB 打開檔案給使用者看 | 要 |
+
+**一定要先跟使用者講的事**:
+- 這台的 DB 設成「以系統管理員身分執行」,每次開 DB 都會跳 Windows 的確認視窗。
+  呼叫要開 DB 的工具之前，先說「會跳確認視窗，請按『是』」。使用者沒按的話，工具會在 10 分鐘後失敗。
+- DB 一次只能開一個。工具發現 DB 開著就會拒絕執行，這時請使用者先存檔、關掉 DB。
+  工具回傳 `note` 說 DB 沒有自己關掉時，請使用者關掉(不用存檔)，再呼叫下一個工具。
+- 所有操作都在副本 `db_models/dbmcp/<模型名>/` 上做，不會改使用者原本的 .dsb。
+- 屬性名稱一律用 `db_inspect` 查，不要猜。數值用 SI 單位，布林用 1/0。
+
+實測(2026-11-13,Model Geometry Example):
+- `db_simulate` 把滲風從 0.7 改成 0.35,EUI 從 141.0 降到 133.7,DB 跑完後會自己關掉，約 1.5 分鐘。
+- `db_measures_report` 約 5 分鐘。
+
+## 8. 規矩
 
 - **不要改** `~/.dsh/profiles/desktop/cordis.yml`;要改設定只改 `cordis.patch.yml`,新增 MCP 要寫在 `insert:` 底下。
 - **不要自己重寫模擬邏輯**。措施、換算、報告都已經有了。少了功能,先問使用者,再找現成的開源專案。

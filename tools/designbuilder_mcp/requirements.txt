@@ -1,0 +1,2 @@
+mcp>=1.2,<2
+db-process @ git+https://github.com/DesignBuilderSoftware/db-process

@@ -306,6 +306,11 @@ Pages 狀態 `built`,已實測回 200。
 17. **Ladybug Tools 會在 `HOME` / `APPDATA` 建資料夾**,sandbox 下會 `WinError 5`;`build_idf.py` 把兩者指到 `tools/modeler/home/`。
 18. **由 `tools/modeler/.venv` 的 Python 帶起的 E+ Transition 程式會當掉**(gfortran backtrace,環境變數與 PATH 完全相同也一樣,
     在 Claude 的 sandbox 下觀察到)。所以 `run_building.py` 用主 Python 當父程序:先呼叫 venv 建模、建完結束,再自己跑 `db_import`。
+    2026-11-13 進一步確認:只要祖先程序裡有 venv 的 `python.exe` 啟動器就會當(孫程序也一樣),用基底 Python 3.12 就正常。
+    所以 DesignBuilder MCP 用基底 `Python312\python.exe` 執行,套件用 `site.addsitedir` 從 `.venv` 載入。
+19. **這台的 DesignBuilder 設成「以系統管理員身分執行」**(HKCU 相容性旗標 `RUNASADMIN`)。`subprocess` 直接啟動會 WinError 740;
+    要用 `Start-Process`,而且每次都跳 UAC 確認視窗、要使用者按「是」;DB 做完 `/process=` 後若沒自己關,一般權限關不掉。
+    使用者選擇保留這個設定(2026-11-13)。不要自行修改。
 
 ---
 
@@ -480,6 +485,9 @@ handover/
 - `build_idf.validate()`:欄位拼錯(原本會被默默忽略)、L 形缺尺寸、型別或範圍錯、非英文 name、JSON 格式錯,都改成一行說明。
 - 參數建模的 IDF 改放 `db_models/built/`,`inbox/` 只留 DB 匯出檔(原本 `db_import.py` 不帶參數會把所有建過的模型重跑)。
 - 報告:回本超過 50 年改印「超過 50 年」;天然氣標示改成「暖氣、熱水」(電暖器建築的天然氣其實是熱水)。
+- DesignBuilder MCP(`tools/designbuilder_mcp/`,DSH 的 `mcp-designbuilder`):把 DB 官方的 db-process(命令列 `/process=`)、
+  Ladybug Tools 的 honeybee-designbuilder(參數 → dsbXML)和現有的節能分析包成 8 個工具;用法見 `handover/HARNESS.md` §7。
+  2026-11-13 端到端實測:建模、讀模型、改屬性跑 DB 模擬(滲風 0.7 → 0.35,EUI 141.0 → 133.7)、節能報告都通;`db_calculate` 未實測。
 
 **驗證方式**:重構後 `scan2` 依序與平行兩種跑法,和修改前逐筆比對結果一致;`db_import` 用 25.1 舊版 IDF
 與中文檔名實測,數字和 26.2 範例完全相同。各檔修改前的版本留在旁邊的 `*.bak-20261029`

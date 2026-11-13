@@ -15,6 +15,10 @@ db_models/out/
 db_models/test/
 db_models/hospital/
 db_models/from_db/
+db_models/dbmcp/
+db_models/gbxml/
+db_models/dbmcp_test/
+db_models/mcp_e2e.log
 db-energy-case/case_study/*/
 db-energy-case/runs/
 db-energy-case/demo/
