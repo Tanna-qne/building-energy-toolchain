@@ -1,0 +1,10 @@
+{
+  "dc_equivalent_kWp": 1027.2729766002362,
+  "ac_rating_kW": 933.8845241820329,
+  "annual_yield_kWh_per_kWp": 1263.9433671243926,
+  "july_yield_kWh_per_kWp": 121.7365788104469,
+  "RMSE_kW": 34.74609330553355,
+  "MAE_kW": 22.849326670823178,
+  "max_abs_kW": 78.16707241566407,
+  "worst_hour": 7
+}
