@@ -39,7 +39,7 @@
 | 围护结构 | 外墙：60 mm 匀质防火保温板 + 200 mm 加气混凝土砌块；坡屋面：50 mm 硬泡聚氨酯；外窗：铝合金框 6Low-E+12A+6 | 洪章飞论文 表 4.5、表 5.9 | 同上 |
 | 室内参数 | 各功能区的人员密度、照明功率、设备功率、新风量、空调设定温度与启停时间 | 洪章飞论文 表 4.6、表 4.7，其依据为 DB34/5076-2017、GB 50034-2013、JGJ 48、JGJ 64、JGJ 67 等设计标准 | 同上 |
 | 气象 | 2025 年 1 月 1 日至 12 月 31 日逐时气温、湿度、气压、风速风向、云量、水平总辐射、法向直射与散射辐射 | 欧洲中期天气预报中心(ECMWF)[ERA5 再分析](https://www.ecmwf.int/en/forecasts/dataset/ecmwf-reanalysis-v5)，经 [Open-Meteo 历史气象 API](https://open-meteo.com/en/docs/historical-weather-api) 取 31.00°N、120.00°E 网格 | [weather/](weather/) |
-| 校准基准 | 长兴服务区典型日 0–23 时基础侧负荷，日合计 4,031 kWh | 通讯作者提供的长兴原表；对应期刊论文第 6.1 节说明典型日由全年历史数据按钟点平均得到([论文链接](https://www.sciencedirect.com/science/article/pii/S0360544226020694)) | [calibration_24h.csv](calibration_24h.csv) |
+| 校准基准 | 长兴服务区典型日 0–23 时基础侧负荷，日合计 4,031 kWh | 通讯作者提供的长兴原表，对应 Lin F, Shi R, et al. *Energy*, 2026, 361: 141962([doi](https://doi.org/10.1016/j.energy.2026.141962))。该文第 6.1 节说明：基础侧负荷包括照明、空调、餐饮、办公及其他辅助负荷，与充电侧由不同变压器供电；典型日由全年历史数据按 24 个钟点平均得到 | [calibration_24h.csv](calibration_24h.csv) |
 | 营业排程 | 逐时营业强度、附属支路系数 | 以上述 24 点校准得到 | [schedules.csv](schedules.csv) |
 
 **气象文件可从原始数据完整重现**:
@@ -148,3 +148,7 @@ EnergyPlus 以 15 分钟为步长，逐时求解每个热区的热平衡：
 4. 重新生成本说明的插图：`uv run --with matplotlib python docs/make_figures.py`。
 
 模型文件为文本格式的 EnergyPlus 输入文件，可用 EnergyPlus 自带的 IDF Editor 或 OpenStudio Application 打开查看几何与参数。
+
+## 参考文献
+
+相关论文的引用与全文见 [references/](references/README.md)。
