@@ -1,0 +1,4 @@
+item,quantity,unit_rating,rating_unit,total_rating,total_unit,assumption
+PV_module,1868,550,Wp_DC,1027.40,kWp_DC,STC generic module rating
+string_inverter_A,15,60,kW_AC,900,kW_AC,rated active output
+string_inverter_B,1,33,kW_AC,33,kW_AC,rated active output
