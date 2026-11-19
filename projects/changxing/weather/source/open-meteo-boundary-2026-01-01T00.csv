@@ -1,0 +1,4 @@
+# Open-Meteo archive API, models=era5, latitude=31.0, longitude=120.0, elevation=12, timezone=Asia/Singapore (UTC+8)
+# Same configuration verified: 2025-07-01..2025-12-31 (4416 hours) identical to open-meteo-31.00N120.00E12m.csv
+time,temperature_2m (°C),wind_speed_10m (km/h),wind_direction_10m (°),surface_pressure (hPa),relative_humidity_2m (%),dew_point_2m (°C),cloud_cover (%),precipitation (mm),shortwave_radiation (W/m²),diffuse_radiation (W/m²),direct_normal_irradiance (W/m²)
+2026-01-01T00:00,6.5,25.2,51,1025.3,70,1.5,95,0.0,0.0,0.0,0.0
