@@ -41,3 +41,7 @@ projects/changxing/**/reference_24h.csv
 projects/changxing/charging_inputs/changxing_reference_24h.csv
 projects/changxing/pv_2025/unit_capacity/typical_day.csv
 projects/changxing/references/*.pdf
+
+# 敏感度分析的暫存模擬
+projects/changxing/sensitivity/_runs/
+projects/changxing/sensitivity/_holdout/

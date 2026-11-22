@@ -1,0 +1,5 @@
+151 次模擬, 14 個參數
+annual_MWh [('epd', 98.41, 1.9), ('cop_c', 93.65, 12.19), ('kitchen', 76.65, 0.43), ('lpd', 72.45, 0.72), ('people', 61.52, 7.3)]
+july_MWh [('cop_c', 21.32, 2.61), ('people', 9.35, 1.28), ('epd', 9.26, 0.23), ('t_cool', 7.74, 0.78), ('kitchen', 6.72, 0.05)]
+cvrmse_pct [('epd', 6.67, 7.2), ('cop_c', 5.99, 5.67), ('lpd', 5.02, 5.57), ('kitchen', 4.44, 4.61), ('people', 4.07, 4.52)]
+baseline {'annual_MWh': 1472.101, 'july_MWh': 149.886, 'peak_kW': 520.936, 'heating_MWh': 67.239, 'cooling_MWh': 225.506, 'cvrmse_pct': 0.099, 'summer_ratio': 1.249, 'winter_ratio': 1.057}
