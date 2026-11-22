@@ -1,0 +1,358 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>長興服務區逐時負荷</title>
+<meta name="description" content="長興高速服務區 2025 年逐時建築用電、充電與光伏(EnergyPlus 校準模擬情景)">
+<style>
+:root {
+  color-scheme: light;
+  --page: #f9f9f7; --surface: #fcfcfb; --border: #e4e3de; --grid: #ecebe6;
+  --ink: #0b0b0b; --ink-2: #52514e; --muted: #898781;
+  --s-building: #2a78d6; --s-charging: #eb6834; --s-pv: #1baf7a; --s-temp: #52514e;
+  --div-neg: #2a78d6; --div-mid: #f0efec; --div-pos: #e34948;
+  --accent: #2a78d6;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --page: #0d0d0d; --surface: #1a1a19; --border: #2e2e2b; --grid: #2a2a27;
+    --ink: #f0efec; --ink-2: #c3c2b7; --muted: #898781;
+    --s-building: #3987e5; --s-charging: #d95926; --s-pv: #199e70; --s-temp: #c3c2b7;
+    --div-neg: #3987e5; --div-mid: #383835; --div-pos: #e66767;
+    --accent: #3987e5;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --page: #0d0d0d; --surface: #1a1a19; --border: #2e2e2b; --grid: #2a2a27;
+  --ink: #f0efec; --ink-2: #c3c2b7; --muted: #898781;
+  --s-building: #3987e5; --s-charging: #d95926; --s-pv: #199e70; --s-temp: #c3c2b7;
+  --div-neg: #3987e5; --div-mid: #383835; --div-pos: #e66767;
+  --accent: #3987e5;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--page); color: var(--ink);
+  font: 15px/1.55 system-ui, -apple-system, "Segoe UI", "Microsoft JhengHei", "PingFang TC", sans-serif; }
+main { max-width: 1080px; margin: 0 auto; padding: 28px 16px 48px; }
+h1 { font-size: 24px; margin: 0 0 4px; letter-spacing: .01em; }
+.sub { color: var(--ink-2); margin: 0 0 4px; }
+.links { font-size: 14px; color: var(--muted); margin-bottom: 20px; }
+a { color: var(--accent); }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 16px; margin-bottom: 16px; }
+.card h2 { font-size: 16px; margin: 0 0 2px; }
+.card .hint { font-size: 13px; color: var(--muted); margin: 0 0 10px; }
+.controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; }
+button, input[type=date] { font: inherit; font-size: 14px; color: var(--ink); background: var(--surface);
+  border: 1px solid var(--border); border-radius: 6px; padding: 5px 10px; cursor: pointer; }
+button:hover { border-color: var(--muted); }
+button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.seg { display: inline-flex; }
+.seg button { border-radius: 0; }
+.seg button:first-child { border-radius: 6px 0 0 6px; }
+.seg button:last-child { border-radius: 0 6px 6px 0; border-left: 0; }
+.seg button[aria-pressed=true] { background: var(--accent); border-color: var(--accent); color: #fff; }
+.quick { margin-left: auto; display: flex; gap: 6px; flex-wrap: wrap; }
+.quick button { font-size: 13px; padding: 4px 8px; }
+.tiles { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; margin-bottom: 12px; }
+.tile { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; }
+.tile .k { font-size: 12px; color: var(--muted); }
+.tile .v { font-size: 20px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.tile .u { font-size: 12px; color: var(--ink-2); font-weight: 400; margin-left: 2px; }
+.legend { display: flex; flex-wrap: wrap; gap: 14px; font-size: 13px; color: var(--ink-2); margin: 2px 0 6px; }
+.legend i { display: inline-block; width: 12px; height: 12px; border-radius: 3px; vertical-align: -1px; margin-right: 5px; }
+.legend i.line { height: 3px; border-radius: 2px; vertical-align: 3px; }
+.chart { position: relative; }
+svg { display: block; width: 100%; overflow: visible; }
+svg text { fill: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.tip { position: absolute; pointer-events: none; background: var(--surface); border: 1px solid var(--border);
+  border-radius: 8px; padding: 8px 10px; font-size: 13px; box-shadow: 0 4px 14px rgba(0,0,0,.12);
+  min-width: 170px; display: none; z-index: 2; }
+.tip b { display: block; margin-bottom: 4px; }
+.tip .row { display: flex; justify-content: space-between; gap: 14px; font-variant-numeric: tabular-nums; }
+.tip .row span:first-child { color: var(--ink-2); }
+.tip .sw { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 5px; }
+.heat-wrap { overflow-x: auto; }
+.scale { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); margin-top: 8px; }
+.scale .bar { width: 180px; height: 10px; border-radius: 3px; }
+table { border-collapse: collapse; width: 100%; font-size: 14px; }
+th, td { text-align: right; padding: 6px 8px; border-bottom: 1px solid var(--border); font-variant-numeric: tabular-nums; }
+th:first-child, td:first-child { text-align: left; }
+th { color: var(--ink-2); font-weight: 600; font-size: 13px; }
+td .b { display: inline-block; height: 8px; background: var(--s-building); border-radius: 0 3px 3px 0; vertical-align: 0; margin-right: 6px; }
+.note { font-size: 13px; color: var(--ink-2); }
+.note li { margin-bottom: 4px; }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+@media (max-width: 720px) {
+  .tiles { grid-template-columns: repeat(2, 1fr); }
+  .quick { margin-left: 0; }
+  h1 { font-size: 20px; }
+}
+</style>
+</head>
+<body>
+<main>
+  <h1>長興服務區 2025 年逐時負荷與光伏</h1>
+  <p class="sub">EnergyPlus 校準模擬(建築)+ 典型日約束的充電與光伏情景,8,760 小時按北京時間對齊。</p>
+  <p class="links"><a href="https://github.com/Tanna-qne/building-energy-toolchain">GitHub 倉庫</a> ·
+    <a href="https://github.com/Tanna-qne/building-energy-toolchain/blob/main/projects/changxing/MODEL_README.md">模型說明</a> ·
+    <a href="https://github.com/Tanna-qne/building-energy-toolchain/blob/main/SUMMARY_EN.md">English summary</a></p>
+
+  <section class="card" aria-labelledby="t-day">
+    <h2 id="t-day">逐時負荷</h2>
+    <p class="hint">選日期或點下方全年熱圖;滑過圖表看每小時數值。</p>
+    <div class="controls">
+      <button id="prev" aria-label="前一段">◀</button>
+      <input type="date" id="date" min="2025-01-01" max="2025-12-31" value="2025-07-16" aria-label="日期">
+      <button id="next" aria-label="後一段">▶</button>
+      <span class="seg" role="group" aria-label="檢視範圍">
+        <button id="v1" aria-pressed="true">日</button><button id="v7" aria-pressed="false">週</button>
+      </span>
+      <span class="quick" aria-label="代表日">
+        <button data-d="2025-07-06">最熱日</button>
+        <button data-d="2025-04-06">溫和日</button>
+        <button data-d="2025-02-08">最冷日</button>
+        <button data-d="peak">全年峰值</button>
+      </span>
+    </div>
+    <div class="tiles" id="tiles"></div>
+    <div class="legend">
+      <span><i style="background:var(--s-building)"></i>建築(EnergyPlus)</span>
+      <span><i style="background:var(--s-charging)"></i>車輛充電</span>
+      <span><i class="line" style="background:var(--s-pv)"></i>光伏發電</span>
+    </div>
+    <div class="chart" id="main-chart"><div class="tip" id="tip"></div></div>
+    <div class="legend" style="margin-top:10px"><span><i class="line" style="background:var(--s-temp)"></i>室外乾球溫度 °C(ERA5)</span></div>
+    <div class="chart" id="temp-chart"></div>
+  </section>
+
+  <section class="card" aria-labelledby="t-heat">
+    <h2 id="t-heat">全年淨負荷熱圖</h2>
+    <p class="hint">淨負荷 = 建築 + 充電 − 光伏。藍色為光伏有餘電(可充儲能),紅色為需向電網購電。點任一格跳到該日。</p>
+    <div class="heat-wrap"><div class="chart" id="heat"></div></div>
+    <div class="scale"><span id="s-min"></span><span class="bar" id="s-bar"></span><span id="s-max"></span></div>
+  </section>
+
+  <section class="card" aria-labelledby="t-ecm">
+    <h2 id="t-ecm">節能措施(9 次全年模擬)</h2>
+    <p class="hint">在校準模型上套用工具鏈的 8 種措施;7 月餘電小時為節能後光伏多於總負荷的小時數(基準 43 h)。</p>
+    <table id="ecm"><thead><tr><th>措施</th><th>全年節電 MWh</th><th>占比</th><th>7 月餘電 h</th></tr></thead><tbody></tbody></table>
+  </section>
+
+  <section class="card note" aria-labelledby="t-read">
+    <h2 id="t-read">怎麼讀這些數據</h2>
+    <ul>
+      <li>實測依據只有一條 24 點的年平均典型日;8,760 小時是<strong>校準後的模擬情景</strong>,不是電表數據。</li>
+      <li>建築用電的日間差異來自 2025 年逐時氣象(空調);營業排程每天相同,未區分節假日。</li>
+      <li>光伏 = 典型日出力 × 當時水平總輻射 / 全年同鐘點平均;充電 = 典型日 × 浙江月度係數 × 實測日際波動。</li>
+      <li>假設與局限見<a href="https://github.com/Tanna-qne/building-energy-toolchain/blob/main/projects/changxing/MODEL_README.md">模型說明</a>第 9、11–13 節。</li>
+    </ul>
+  </section>
+</main>
+
+<script>
+const NS = "http://www.w3.org/2000/svg";
+const $ = (s) => document.querySelector(s);
+const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+const fmt = (x, d = 0) => x.toLocaleString("zh-TW", { minimumFractionDigits: d, maximumFractionDigits: d });
+const el = (tag, attrs = {}, parent) => {
+  const e = document.createElementNS(NS, tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  if (parent) parent.appendChild(e);
+  return e;
+};
+const DAY0 = Date.UTC(2025, 0, 1);
+const dayOf = (iso) => Math.round((Date.parse(iso + "T00:00:00Z") - DAY0) / 864e5);
+const isoOf = (d) => new Date(DAY0 + d * 864e5).toISOString().slice(0, 10);
+const label = (d) => { const t = new Date(DAY0 + d * 864e5); return `${t.getUTCMonth() + 1}/${t.getUTCDate()}`; };
+const niceMax = (v) => { const p = 10 ** Math.floor(Math.log10(v)); return [1, 1.2, 1.6, 2, 2.4, 3, 4, 5, 6, 8, 10].find((m) => m * p >= v) * p; };
+
+let D, day = dayOf("2025-07-16"), span = 1;
+
+fetch("data.json").then((r) => r.json()).then((data) => {
+  D = data;
+  D.load = D.building.map((b, i) => b + D.charging[i]);
+  D.net = D.load.map((l, i) => l - D.pv[i]);
+  const peak = D.load.indexOf(Math.max(...D.load));
+  D.peakDay = Math.floor(peak / 24);
+  drawHeat(); drawEcm(); update();
+  matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { drawHeat(); update(); });
+  addEventListener("resize", () => { clearTimeout(window._rt); window._rt = setTimeout(() => { drawHeat(); update(); }, 150); });
+});
+
+function setDay(d) { day = Math.max(0, Math.min(365 - span, d)); update(); }
+$("#prev").onclick = () => setDay(day - span);
+$("#next").onclick = () => setDay(day + span);
+$("#date").onchange = (e) => e.target.value && setDay(dayOf(e.target.value));
+for (const [id, n] of [["#v1", 1], ["#v7", 7]]) $(id).onclick = () => {
+  span = n; $("#v1").setAttribute("aria-pressed", n === 1); $("#v7").setAttribute("aria-pressed", n === 7); setDay(day);
+};
+document.querySelectorAll(".quick button").forEach((b) => b.onclick = () => setDay(b.dataset.d === "peak" ? D.peakDay : dayOf(b.dataset.d)));
+
+function update() {
+  $("#date").value = isoOf(day);
+  const a = day * 24, z = a + span * 24;
+  const sum = (arr) => arr.slice(a, z).reduce((s, x) => s + x, 0);
+  const load = sum(D.load), pv = sum(D.pv);
+  const surplus = D.net.slice(a, z).reduce((s, x) => s + Math.max(-x, 0), 0);
+  const t = D.temp.slice(a, z), tmean = t.reduce((s, x) => s + x, 0) / t.length;
+  const tiles = [
+    ["總用電", fmt(load), "kWh"], ["其中建築", fmt(sum(D.building)), "kWh"], ["光伏發電", fmt(pv), "kWh"],
+    ["光伏餘電", fmt(surplus), "kWh"], ["平均氣溫", fmt(tmean, 1), "°C"],
+  ];
+  $("#tiles").innerHTML = tiles.map(([k, v, u]) => `<div class="tile"><div class="k">${k}</div><div class="v">${v}<span class="u">${u}</span></div></div>`).join("");
+  drawMain(a, z); drawTemp(a, z); markHeat();
+}
+
+function frame(host, h, pad) {
+  host.querySelectorAll("svg").forEach((s) => s.remove());
+  const w = host.clientWidth;
+  const svg = el("svg", { viewBox: `0 0 ${w} ${h}`, height: h, role: "img" });
+  host.prepend(svg);
+  return { svg, w, h, x0: pad.l, x1: w - pad.r, y0: h - pad.b, y1: pad.t };
+}
+
+function xAxis(f, a, z) {
+  const n = z - a, bw = (f.x1 - f.x0) / n, step = n <= 24 ? 3 : 24;
+  for (let i = 0; i <= n; i += step) {
+    const x = f.x0 + i * bw;
+    if (n > 24 && i < n) { el("line", { x1: x, x2: x, y1: f.y1, y2: f.y0, stroke: css("--grid") }, f.svg); }
+    const t = el("text", { x: n <= 24 ? x : x + 12 * bw, y: f.y0 + 16, "text-anchor": "middle" }, f.svg);
+    t.textContent = n <= 24 ? (i < 24 ? `${i}時` : "") : (i < n ? label((a + i) / 24) : "");
+  }
+  return bw;
+}
+
+function yAxis(f, max, ticks, unit) {
+  for (let i = 0; i <= ticks; i++) {
+    const v = (max * i) / ticks, y = f.y0 - ((f.y0 - f.y1) * i) / ticks;
+    el("line", { x1: f.x0, x2: f.x1, y1: y, y2: y, stroke: i ? css("--grid") : css("--muted") }, f.svg);
+    const t = el("text", { x: f.x0 - 6, y: y + 4, "text-anchor": "end" }, f.svg);
+    t.textContent = fmt(v) + (i === ticks ? ` ${unit}` : "");
+  }
+}
+
+function drawMain(a, z) {
+  const host = $("#main-chart"), f = frame(host, 300, { l: 64, r: 8, t: 12, b: 24 });
+  const n = z - a;
+  const max = niceMax(Math.max(...D.load.slice(a, z), ...D.pv.slice(a, z)) * 1.05);
+  const y = (v) => f.y0 - (v / max) * (f.y0 - f.y1);
+  yAxis(f, max, 4, "kWh");
+  const bw = xAxis(f, a, z), gap = n <= 24 ? 2 : 0.5, r = n <= 24 ? 4 : 1.5;
+  for (let i = 0; i < n; i++) {
+    const k = a + i, x = f.x0 + i * bw + gap / 2, w = Math.max(bw - gap, 0.5);
+    const yb = y(D.building[k]), yt = y(D.load[k]);
+    el("rect", { x, y: yb, width: w, height: f.y0 - yb, fill: css("--s-building") }, f.svg);
+    // 充電段在上方: 頂端圓角, 與建築段之間留 2px 表面色間隙
+    const h = Math.max(yb - yt - (n <= 24 ? 2 : 0), 0);
+    el("path", { d: roundTop(x, yt, w, h, Math.min(r, h, w / 2)), fill: css("--s-charging") }, f.svg);
+  }
+  const pts = D.pv.slice(a, z).map((v, i) => `${f.x0 + (i + 0.5) * bw},${y(v)}`).join(" ");
+  el("polyline", { points: pts, fill: "none", stroke: css("--surface"), "stroke-width": 5, "stroke-linejoin": "round" }, f.svg);
+  el("polyline", { points: pts, fill: "none", stroke: css("--s-pv"), "stroke-width": 2, "stroke-linejoin": "round" }, f.svg);
+  if (n <= 24) D.pv.slice(a, z).forEach((v, i) => v > 0 && el("circle", { cx: f.x0 + (i + 0.5) * bw, cy: y(v), r: 4, fill: css("--s-pv"), stroke: css("--surface"), "stroke-width": 2 }, f.svg));
+  hover(host, f, a, n, bw, y, true);
+}
+
+function roundTop(x, y, w, h, r) {
+  if (h <= 0) return "";
+  r = Math.max(0, r);
+  return `M${x},${y + h}V${y + r}Q${x},${y} ${x + r},${y}H${x + w - r}Q${x + w},${y} ${x + w},${y + r}V${y + h}Z`;
+}
+
+function drawTemp(a, z) {
+  const host = $("#temp-chart"), f = frame(host, 110, { l: 64, r: 8, t: 8, b: 24 });
+  const t = D.temp.slice(a, z), lo = Math.floor(Math.min(...t) / 5) * 5, hi = Math.ceil(Math.max(...t) / 5) * 5 || lo + 5;
+  const y = (v) => f.y0 - ((v - lo) / (hi - lo)) * (f.y0 - f.y1);
+  for (const v of [lo, hi]) {
+    el("line", { x1: f.x0, x2: f.x1, y1: y(v), y2: y(v), stroke: css("--grid") }, f.svg);
+    el("text", { x: f.x0 - 6, y: y(v) + 4, "text-anchor": "end" }, f.svg).textContent = `${v} °C`;
+  }
+  const bw = xAxis(f, a, z);
+  el("polyline", { points: t.map((v, i) => `${f.x0 + (i + 0.5) * bw},${y(v)}`).join(" "), fill: "none", stroke: css("--s-temp"), "stroke-width": 2 }, f.svg);
+}
+
+function hover(host, f, a, n, bw, y) {
+  const tip = $("#tip");
+  const cross = el("line", { y1: f.y1, y2: f.y0, stroke: css("--muted"), "stroke-dasharray": "3 3", visibility: "hidden" }, f.svg);
+  const hit = el("rect", { x: f.x0, y: f.y1, width: f.x1 - f.x0, height: f.y0 - f.y1, fill: "transparent" }, f.svg);
+  const show = (evt) => {
+    const box = f.svg.getBoundingClientRect(), sx = (evt.clientX - box.left) * (f.w / box.width);
+    const i = Math.max(0, Math.min(n - 1, Math.floor((sx - f.x0) / bw))), k = a + i;
+    const cx = f.x0 + (i + 0.5) * bw;
+    cross.setAttribute("x1", cx); cross.setAttribute("x2", cx); cross.setAttribute("visibility", "visible");
+    const h = k % 24, net = D.net[k];
+    tip.innerHTML = `<b>${label(Math.floor(k / 24))} ${h}:00–${h + 1}:00</b>` +
+      row("--s-building", "建築", D.building[k]) + row("--s-charging", "充電", D.charging[k]) +
+      row("--s-pv", "光伏", D.pv[k]) +
+      `<div class="row" style="margin-top:4px;border-top:1px solid var(--border);padding-top:4px"><span>${net < 0 ? "餘電" : "淨購電"}</span><span>${fmt(Math.abs(net), 1)} kWh</span></div>` +
+      `<div class="row"><span>氣溫</span><span>${fmt(D.temp[k], 1)} °C</span></div>`;
+    tip.style.display = "block";
+    const px = cx * (box.width / f.w), tw = tip.offsetWidth;
+    tip.style.left = (px + 14 + tw > box.width ? px - tw - 14 : px + 14) + "px";
+    tip.style.top = "10px";
+  };
+  const hide = () => { tip.style.display = "none"; cross.setAttribute("visibility", "hidden"); };
+  hit.addEventListener("pointermove", show);
+  hit.addEventListener("pointerdown", show);
+  hit.addEventListener("pointerleave", hide);
+}
+const row = (c, k, v) => `<div class="row"><span><i class="sw" style="background:var(${c})"></i>${k}</span><span>${fmt(v, 1)} kWh</span></div>`;
+
+function mix(c1, c2, t) {
+  const p = (c) => [1, 3, 5].map((i) => parseInt(c.slice(i, i + 2), 16));
+  const [a, b] = [p(c1), p(c2)];
+  return `rgb(${a.map((v, i) => Math.round(v + (b[i] - v) * t)).join(",")})`;
+}
+
+let heatSvg, heatMark, cellW, heatTop;
+function drawHeat() {
+  const host = $("#heat");
+  host.querySelectorAll("svg").forEach((s) => s.remove());
+  const w = Math.max(host.parentElement.clientWidth, 640), padL = 36, padT = 16, ch = 7;
+  cellW = (w - padL - 4) / 365; heatTop = padT;
+  const h = padT + 24 * ch + 4;
+  heatSvg = el("svg", { viewBox: `0 0 ${w} ${h}`, height: h, width: w, role: "img", "aria-label": "全年逐時淨負荷熱圖" });
+  host.appendChild(heatSvg);
+  const lo = Math.min(...D.net), hi = Math.max(...D.net), m = Math.max(-lo, hi);
+  const neg = css("--div-neg"), mid = css("--div-mid"), pos = css("--div-pos");
+  const color = (v) => v < 0 ? mix(mid, neg, Math.min(-v / m * 2.2, 1)) : mix(mid, pos, v / m);
+  for (let d = 0; d < 365; d++) for (let hr = 0; hr < 24; hr++) {
+    el("rect", { x: padL + d * cellW, y: padT + hr * ch, width: cellW + 0.4, height: ch, fill: color(D.net[d * 24 + hr]) }, heatSvg);
+  }
+  [0, 6, 12, 18].forEach((hr) => el("text", { x: padL - 6, y: padT + hr * ch + ch, "text-anchor": "end" }, heatSvg).textContent = `${hr}時`);
+  for (let mo = 0; mo < 12; mo++) {
+    const d = dayOf(`2025-${String(mo + 1).padStart(2, "0")}-01`);
+    el("text", { x: padL + d * cellW, y: padT - 5 }, heatSvg).textContent = `${mo + 1}月`;
+  }
+  heatMark = el("rect", { y: padT - 1, height: 24 * ch + 2, fill: "none", stroke: css("--ink"), "stroke-width": 1.5, rx: 2 }, heatSvg);
+  const hit = el("rect", { x: padL, y: padT, width: 365 * cellW, height: 24 * ch, fill: "transparent", style: "cursor:pointer" }, heatSvg);
+  hit.addEventListener("click", (e) => {
+    const box = heatSvg.getBoundingClientRect(), sx = (e.clientX - box.left) * (w / box.width);
+    setDay(Math.floor((sx - padL) / cellW));
+  });
+  hit.addEventListener("pointermove", (e) => {
+    const box = heatSvg.getBoundingClientRect(), sx = (e.clientX - box.left) * (w / box.width), sy = (e.clientY - box.top) * (h / box.height);
+    const d = Math.floor((sx - padL) / cellW), hr = Math.floor((sy - padT) / ch);
+    if (d >= 0 && d < 365 && hr >= 0 && hr < 24) hit.innerHTML = `<title>${label(d)} ${hr}時 淨負荷 ${fmt(D.net[d * 24 + hr], 0)} kWh</title>`;
+  });
+  $("#s-min").textContent = `餘電 ${fmt(-lo)} kWh`;
+  $("#s-max").textContent = `購電 ${fmt(hi)} kWh`;
+  $("#s-bar").style.background = `linear-gradient(90deg, ${color(lo)}, ${mid} ${100 * -lo / (hi - lo)}%, ${color(hi)})`;
+  markHeat();
+}
+function markHeat() {
+  if (!heatMark) return;
+  heatMark.setAttribute("x", 36 + day * cellW - 1);
+  heatMark.setAttribute("width", span * cellW + 2);
+}
+
+function drawEcm() {
+  const max = Math.max(...D.ecm.map((r) => r.saving_MWh));
+  $("#ecm tbody").innerHTML = D.ecm.slice().sort((p, q) => q.saving_MWh - p.saving_MWh).map((r) =>
+    `<tr><td>${r.label}</td><td><span class="b" style="width:${Math.max(2, 90 * r.saving_MWh / max)}px"></span>${fmt(r.saving_MWh, 1)}</td><td>${fmt(r.saving_pct, 1)}%</td><td>${r.surplus_h}</td></tr>`).join("");
+}
+</script>
+</body>
+</html>

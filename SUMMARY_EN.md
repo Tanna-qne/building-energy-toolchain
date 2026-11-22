@@ -2,6 +2,8 @@
 
 [![CI](https://github.com/Tanna-qne/building-energy-toolchain/actions/workflows/ci.yml/badge.svg)](https://github.com/Tanna-qne/building-energy-toolchain/actions/workflows/ci.yml)
 
+**Interactive results:** [https://tanna-qne.github.io/building-energy-toolchain/](https://tanna-qne.github.io/building-energy-toolchain/) — browse any day or week of the 8,760-hour load, PV and net-load profile.
+
 EnergyPlus-based building energy modelling, calibration and retrofit analysis. The repository has one complete case study and a reusable pipeline. The detailed documentation is in Chinese; this page summarises it.
 
 ## Case study: hourly base load for a highway service area with PV, storage and EV charging
