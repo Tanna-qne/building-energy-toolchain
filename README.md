@@ -2,6 +2,8 @@
 
 [![CI](https://github.com/Tanna-qne/building-energy-toolchain/actions/workflows/ci.yml/badge.svg)](https://github.com/Tanna-qne/building-energy-toolchain/actions/workflows/ci.yml)
 
+**English summary: [SUMMARY_EN.md](SUMMARY_EN.md)**
+
 以 EnergyPlus 為核心的建築能耗建模、校準與節能評估工作。包含一個完整的研究算例(長興高速服務區光儲充系統的負荷建模)，以及一套可重複使用的參數化建模與節能措施分析管線。
 
 | 能力 | 本倉庫中的實作 |
