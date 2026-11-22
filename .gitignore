@@ -45,3 +45,4 @@ projects/changxing/references/*.pdf
 # 敏感度分析的暫存模擬
 projects/changxing/sensitivity/_runs/
 projects/changxing/sensitivity/_holdout/
+projects/changxing/ecm/_runs/
