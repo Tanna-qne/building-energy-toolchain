@@ -39,7 +39,7 @@
 | 围护结构 | 外墙：60 mm 匀质防火保温板 + 200 mm 加气混凝土砌块；坡屋面：50 mm 硬泡聚氨酯；外窗：铝合金框 6Low-E+12A+6 | 洪章飞论文 表 4.5(第 52–53 页)、表 5.9(第 87 页) | 同上 |
 | 室内参数 | 各功能区的人员密度、照明功率、设备功率、新风量、空调设定温度与启停时间 | 洪章飞论文 表 4.6、表 4.7(第 54 页)，其依据为 DB34/5076-2017、GB 50034-2013、JGJ 48、JGJ 64、JGJ 67 等设计标准 | 同上 |
 | 气象 | 2025 年 1 月 1 日至 12 月 31 日逐时气温、湿度、气压、风速风向、云量、水平总辐射、法向直射与散射辐射 | 欧洲中期天气预报中心(ECMWF)[ERA5 再分析](https://www.ecmwf.int/en/forecasts/dataset/ecmwf-reanalysis-v5)，经 [Open-Meteo 历史气象 API](https://open-meteo.com/en/docs/historical-weather-api) 取 31.00°N、120.00°E 网格 | [weather/](weather/) |
-| 校准基准 | 长兴服务区典型日 0–23 时基础侧负荷，日合计 4,031 kWh | 通讯作者提供的长兴原表，对应 Lin F, Shi R, et al. *Energy*, 2026, 361: 141962([doi](https://doi.org/10.1016/j.energy.2026.141962) · [全文](references/Lin_dual_transformer_PV_storage_charging.pdf))。该文第 6.1 节(第 9 页)说明：基础侧负荷包括照明、空调、餐饮、办公及其他辅助负荷，与充电侧由不同变压器供电；典型日由全年历史数据按 24 个钟点平均得到 | [calibration_24h.csv](calibration_24h.csv) |
+| 校准基准 | 长兴服务区典型日 0–23 时基础侧负荷，日合计 4,031 kWh | 通讯作者提供的长兴原表，对应 Lin F, Shi R, et al. *Energy*, 2026, 361: 141962([doi](https://doi.org/10.1016/j.energy.2026.141962))。该文第 6.1 节(第 9 页)说明：基础侧负荷包括照明、空调、餐饮、办公及其他辅助负荷，与充电侧由不同变压器供电；典型日由全年历史数据按 24 个钟点平均得到 | 未公开 |
 | 营业排程 | 逐时营业强度、附属支路系数 | 以上述 24 点校准得到 | [schedules.csv](schedules.csv) |
 
 **气象文件可从原始数据完整重现**:
@@ -114,7 +114,7 @@ EnergyPlus 以 15 分钟为步长，逐时求解每个热区的热平衡：
 - 逐时序列的连续性来自气象数据本身的连续性：气温与日照逐小时变化，空调负荷随之变化。
 - 营业相关的用电(照明、设备、厨房)在不同日期保持相同形状。
 - 最冷日高于温和日，差额主要是热泵供暖用电；全年供暖用电合计约 67,239 kWh。
-- 季节差异与实测服务区的规律一致：本模型夏季(6–8 月)、冬季(12–2 月)日均负荷分别为过渡季的 1.25 倍和 1.06 倍；Ye 等(2025)新疆服务区 2022–2024 年逐时实测的基础负荷，读图 7(第 13 页)约为 1.27 倍和 1.08 倍([全文](references/Ye2025_multistage_stochastic_robust_planning_Energy340.pdf))。两地气候不同，此处只作量级旁证。
+- 季节差异与实测服务区的规律一致：本模型夏季(6–8 月)、冬季(12–2 月)日均负荷分别为过渡季的 1.25 倍和 1.06 倍；Ye 等(2025)新疆服务区 2022–2024 年逐时实测的基础负荷，读图 7(第 13 页)约为 1.27 倍和 1.08 倍([doi](https://doi.org/10.1016/j.energy.2025.139189))。两地气候不同，此处只作量级旁证。
 
 ## 8 结果文件
 
@@ -122,7 +122,6 @@ EnergyPlus 以 15 分钟为步长，逐时求解每个热区的热平衡：
 |---|---|
 | [hourly_2025.csv](hourly_2025.csv) | 2025 年 8,760 小时逐时用电(kWh)。`comparison_kWh` 为与长兴原表同口径的基础侧负荷；`station_total_kWh` 为全站电表(另含单独计量的附属支路 `ancillary7_kWh`) |
 | [hourly_2025_07.csv](hourly_2025_07.csv) | 其中 7 月连续 744 小时 |
-| [calibration_24h.csv](calibration_24h.csv) | 全年同钟点均值与原表 24 点对照 |
 
 2025 年全年基础侧负荷(`comparison_kWh`)合计 1,472,101 kWh。7 月合计 149,886 kWh,最大小时出现在 7 月 16 日 12–13 时，为 520.9 kWh。
 
@@ -171,7 +170,7 @@ $$E(d,h) = P_{ref}(h)\times 1\,\text{h}\times k_{月}(m)\times\frac{s(d)}{\overl
 
 | 因子 | 含义 | 来源 |
 |---|---|---|
-| $P_{ref}(h)$ | 长兴原表充电列第 $h$ 钟点 | 通讯作者提供，[charging_inputs/changxing_reference_24h.csv](charging_inputs/changxing_reference_24h.csv) |
+| $P_{ref}(h)$ | 长兴原表充电列第 $h$ 钟点 | 通讯作者提供，未公开 |
 | $k_{月}(m)$ | 该月日均电量 ÷ 全年日均电量 | 《浙江省充换电基础设施发展报告(2022 年度)》图 3-5，全省高速公路服务区快充站月电量([报告 PDF](https://zjjcmspublic.oss-cn-hangzhou-zwynet-d01-a.internet.cloud.zj.gov.cn/jcms1/web3185/site/attach/0/b09089e65504409db3353586c54918ca.pdf))，[zhejiang_monthly.csv](charging_inputs/zhejiang_monthly.csv) |
 | $s(d)$ | 日际相对波动，按工作日 / 周末分组有放回抽样，固定种子 20250701 | 深圳 UrbanEV 公开数据集 2022-09 至 2023-02 共 181 天([Dryad](https://datadryad.org/dataset/doi%3A10.5061/dryad.np5hqc04z))，[shenzhen_daily_variation.csv](charging_inputs/shenzhen_daily_variation.csv) |
 | $\overline{s}_m$ | 该月抽样均值，使月系数保持为 $k_{月}(m)$ | — |

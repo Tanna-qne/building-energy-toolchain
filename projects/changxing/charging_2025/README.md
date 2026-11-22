@@ -6,4 +6,4 @@
 
 容量检验采用每个等效位电表侧 60 kW 的算例假设。原 12 位（720 kW）在 9、10、12 月连月平均曲线的最高小时也不能覆盖，全年有 277 小时超过 720 kW。本次按需求建模，取覆盖本次最大小时平均负荷 1058.78 kW 所需的最少整数 18 位（1080 kW）。按这个情景各月各小时都可供给，没有削减或移峰。该容量仅按小时平均功率校核，现场桩数、瞬时峰值与排队情况未知。
 
-charging_hourly_2025.csv 为全年 8760 小时的充电电量。calibration_24h.csv 的偏差为模型减原表。charging_monthly.csv 可核对每月电量、系数和容量余量。total_hourly_2025_07.csv 的 station_total_kWh 是定版基础侧全站用电，charging_kWh 取自同次全年结果，total_kWh 为逐小时相加值。
+charging_hourly_2025.csv 为全年 8760 小时的充电电量。charging_monthly.csv 可核对每月电量、系数和容量余量。total_hourly_2025_07.csv 的 station_total_kWh 是定版基础侧全站用电，charging_kWh 取自同次全年结果，total_kWh 为逐小时相加值。

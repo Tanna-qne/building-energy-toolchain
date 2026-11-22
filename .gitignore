@@ -34,3 +34,10 @@ handover/HANDOVER.old.pdf
 
 # 其他工具的暫存(曾誤收過 Unity 付費素材與截圖)
 .tmp/
+
+# 未公開資料: 通訊作者提供的長興原表、受版權保護的論文全文(只留在本機)
+projects/changxing/**/calibration_24h.csv
+projects/changxing/**/reference_24h.csv
+projects/changxing/charging_inputs/changxing_reference_24h.csv
+projects/changxing/pv_2025/unit_capacity/typical_day.csv
+projects/changxing/references/*.pdf

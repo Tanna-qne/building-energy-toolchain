@@ -1,10 +1,48 @@
-# 建築能耗模擬工具鏈
+# 建築能耗模擬與校準工具鏈
 
-輸入幾個建築參數(尺寸、樓層、窗牆比、用途、空調系統),自動建好 EnergyPlus 模型,
-跑基準與 8 種節能措施(換省電燈具、外窗貼隔熱膜、燈具 + 貼膜、加強氣密、屋頂反射漆、換節能設備、
-加強牆與屋頂隔熱、換高效率空調),
-算出省能、省錢與回收期。
-不需要會 DesignBuilder 或 EnergyPlus。
+以 EnergyPlus 為核心的建築能耗建模、校準與節能評估工作。包含一個完整的研究算例(長興高速服務區光儲充系統的負荷建模)，以及一套可重複使用的參數化建模與節能措施分析管線。
+
+| 能力 | 本倉庫中的實作 |
+|---|---|
+| 建築能耗建模 | EnergyPlus 26.2、OpenStudio SDK、Ladybug Tools(honeybee-energy)；18 熱區綜合樓模型、PTHP 分體熱泵、Schedule:Compact 營業排程 |
+| 模型校準 | 依 ASHRAE Guideline 14 逐時指標：CV(RMSE) 0.10%、NMBE +0.06%(門檻 30% / ±10%)；以全年 365 天同鐘點均值對照實測典型日，迭代調整排程 |
+| 氣象資料處理 | ECMWF ERA5 再分析(Open-Meteo API)→ EPW，可逐位元組重現；太陽幾何核對時間對齊 |
+| 可再生能源與負荷序列 | 光伏：GHI 歸一化經驗情景 + NREL PVWatts v5 物理情景；充電：省級月度統計 × 實測日際波動的隨機情景 |
+| 節能措施與經濟性 | 8 種 ECM 與組合、年省能/省錢、簡單回收期、電價與造價敏感度 |
+| 自動化 | Python 管線、平行模擬(MCP server 池)、DesignBuilder dsbXML 生成與 MCP 控制、煙霧測試 |
+
+## 代表作：長興服務區光儲充負荷建模
+
+> [projects/changxing/MODEL_README.md](projects/changxing/MODEL_README.md)
+
+**問題**：光儲充容量優化需要全年 8,760 小時負荷，但現場只有一條 24 點的年平均典型日。
+
+**方法**
+1. 以文獻原型(洪章飛 2024，合肥工業大學)建立兩層綜合樓 EnergyPlus 模型，圍護與室內參數按 DB34/5076、GB 50034 等標準取值，規模縮放至 5,048 m²。
+2. 由 ERA5 產生 2025 年逐時 EPW，讓空調負荷隨真實氣象變化。
+3. 校準：每輪跑完全年，以 365 天同鐘點均值對照典型日 24 點，殘差換算成營業強度、分攤負荷與站房支路三個校準量，3 輪收斂至最大偏差 0.61 kW。
+4. 加入冬季熱泵供暖後，季節比例(夏 1.25、冬 1.06，相對過渡季)與 Ye 等(2025，*Energy* 340)的服務區實測(約 1.27、1.08)一致，作為校準以外的旁證。
+5. 光伏與充電序列以同一原則構造(全年同鐘點均值約束回典型日)，三條序列按北京時間逐小時對齊，輸出 7 月 744 小時的調度輸入。
+
+**誠實揭露**：吻合度反映校準完成程度而非獨立驗證；所有假設與局限列於說明文件第 9、11 節。
+
+![校準對照](projects/changxing/docs/calibration_24h.png)
+
+## 參數化節能措施分析
+
+輸入建築參數(尺寸、樓層、窗牆比、用途、空調系統)，自動生成 EnergyPlus 模型，跑基準與 8 種節能措施(照明、外窗隔熱膜、照明 + 貼膜、氣密、屋頂反射漆、節能設備、圍護隔熱、高效空調)，輸出省能、省錢與回收期報告。也可直接讀入 DesignBuilder 匯出的 IDF(自動升級 23.1 → 26.2)。
+
+| 模組 | 說明 |
+|---|---|
+| [tools/modeler/build_idf.py](tools/modeler/build_idf.py) | 參數 → dragonfly 量體 → honeybee 負載/構造/HVAC → IDF |
+| [scan2/](scan2/) | 措施與組合模擬、回收期；多個 MCP server 平行執行 |
+| [sensitivity.py](sensitivity.py) | 電價與造價敏感度網頁 |
+| [tools/designbuilder_mcp/](tools/designbuilder_mcp/) | DesignBuilder 的 MCP server(8 個工具：讀模型、改屬性、模擬、措施報告、由參數建模) |
+| [tests/smoke.py](tests/smoke.py) | 端到端煙霧測試(建模、升級、措施、批量模擬) |
+
+敏感度分析的公開成果另見 [building-energy-sensitivity](https://github.com/Tanna-qne/building-energy-sensitivity)。
+
+## 使用方式
 
 ## 三步驟
 
