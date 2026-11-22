@@ -249,8 +249,8 @@ $$E(d,h) = P_{ref}(h)\times 1\,\text{h}\times k_{月}(m)\times\frac{s(d)}{\overl
 ### 12.3 复现
 
 ```
-vendor/EnergyPlus-MCP/energyplus-mcp-server/.venv/Scripts/python.exe projects/changxing/sensitivity/morris.py    # 约 25 分钟(10 进程)
-vendor/EnergyPlus-MCP/energyplus-mcp-server/.venv/Scripts/python.exe projects/changxing/sensitivity/holdout.py   # 约 3 分钟
+uv run --with eppy python projects/changxing/sensitivity/morris.py    # 约 25 分钟(10 进程)
+uv run --with eppy python projects/changxing/sensitivity/holdout.py   # 约 3 分钟
 uv run --with matplotlib python projects/changxing/sensitivity/make_figures.py
 ```
 
@@ -320,11 +320,11 @@ uv run --with matplotlib python projects/changxing/sensitivity/make_figures.py
 复现：
 
 ```
-vendor/EnergyPlus-MCP/energyplus-mcp-server/.venv/Scripts/python.exe projects/changxing/ecm/ecm.py   # 10 进程并行
+uv run --with eppy python projects/changxing/ecm/ecm.py   # 最多 10 进程并行
 uv run --with matplotlib python projects/changxing/ecm/make_figure.py
 ```
 
-本节只用公开文件(定版模型、`hourly_2025.csv`、7 月光伏序列)，克隆仓库后即可重跑。
+本节只用公开文件(定版模型、`hourly_2025.csv`、7 月光伏序列)。装好 EnergyPlus 26.2 后克隆仓库即可重跑(安装目录不在默认位置时，设环境变量 `ENERGYPLUS_DIR`)。GitHub Actions 每次 push 都在 Linux 上重跑定版模型与本节的 9 种措施，并与仓库中的结果比对(见 [tests/ci_check.py](../../tests/ci_check.py))。
 
 ## 参考文献
 

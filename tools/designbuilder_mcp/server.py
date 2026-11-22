@@ -9,7 +9,7 @@
 DB 一次只能開一個; 工具在 DB 開著時會拒絕執行, 不會關掉使用者的視窗。
 操作一律用模型的副本(db_models/dbmcp/<模型名>/), 不改使用者原本的 .dsb。
 
-    C:/Users/kiri/AppData/Local/Programs/Python/Python312/python.exe tools/designbuilder_mcp/server.py
+    <Python 3.12 安裝目錄>/python.exe tools/designbuilder_mcp/server.py
 
 用 venv 的「基底」Python 執行, 不要用 .venv/Scripts/python.exe: 在 venv 啟動器底下開的子程序裡,
 E+ 的 Transition(版本升級)會當掉(HANDOVER 坑 18), 節能報告就跑不出來。套件從 .venv 載入。
@@ -35,7 +35,9 @@ from mcp.server.fastmcp import FastMCP  # noqa: E402
 WS = HERE.parents[1]
 WORK = WS / "db_models" / "dbmcp"
 DB_EP_DIR = Path(os.environ["LOCALAPPDATA"]) / "DesignBuilder" / "EnergyPlus"
-MAIN_PY = Path(r"C:\Users\kiri\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\python\python.exe")
+# 跑節能報告(from_db.py)的 Python: 預設是 DSH 內建 runtime, 可用環境變數 REPORT_PYTHON 指定
+MAIN_PY = Path(os.environ.get("REPORT_PYTHON") or
+               Path.home() / ".dsh/dsh-runtimes/dsh-primary-runtime/dependencies/python/python.exe")
 MODELER_PY = WS / "tools" / "modeler" / ".venv" / "Scripts" / "python.exe"
 EP_OUTPUTS = ("in.idf", "eplusout.err", "eplustbl.htm", "eplusout.eso")
 

@@ -1,7 +1,9 @@
 """敏感度分析與留出驗證共用: 參數定義、IDF 修改、平行模擬、輸出指標。"""
 import csv
+import os
 import shutil
 import subprocess
+import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -11,8 +13,10 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
 BASE_IDF = ROOT / "cx_lowest_max.idf"
 EPW = ROOT / "weather" / "CHN_Changxing_ERA5_31.00N_120.00E_2025.epw"
-EP = Path(r"C:/Users/kiri/AppData/Local/Programs/EnergyPlusV26-2-0/EnergyPlus-26.2.0-4bd7a1f26f-Windows-x86_64")
-WORKERS = 10
+sys.path.insert(0, str(ROOT.parents[1]))
+from eplus_paths import energyplus_dir, energyplus_exe  # noqa: E402
+EP, EP_EXE = energyplus_dir(), energyplus_exe()
+WORKERS = min(10, os.cpu_count() or 1)
 
 # (代號, 說明, 下限, 上限, 定版值); 乘數類定版值為 1, 偏移類為 0
 PARAMS = [
@@ -107,7 +111,7 @@ class Model:
 def simulate(idf_path, run_dir):
     shutil.rmtree(run_dir, ignore_errors=True)
     run_dir.mkdir(parents=True)
-    r = subprocess.run([str(EP / "energyplus.exe"), "-w", str(EPW), "-d", str(run_dir), "-r", str(idf_path)],
+    r = subprocess.run([str(EP_EXE), "-w", str(EPW), "-d", str(run_dir), "-r", str(idf_path)],
                        capture_output=True, text=True, stdin=subprocess.DEVNULL, cwd=run_dir)
     if r.returncode:
         raise RuntimeError(f"{idf_path.name}: " + (run_dir / "eplusout.err").read_text(encoding="latin-1")[-1500:])

@@ -1,5 +1,7 @@
 # 建築能耗模擬與校準工具鏈
 
+[![CI](https://github.com/Tanna-qne/building-energy-toolchain/actions/workflows/ci.yml/badge.svg)](https://github.com/Tanna-qne/building-energy-toolchain/actions/workflows/ci.yml)
+
 以 EnergyPlus 為核心的建築能耗建模、校準與節能評估工作。包含一個完整的研究算例(長興高速服務區光儲充系統的負荷建模)，以及一套可重複使用的參數化建模與節能措施分析管線。
 
 | 能力 | 本倉庫中的實作 |
@@ -9,7 +11,7 @@
 | 氣象資料處理 | ECMWF ERA5 再分析(Open-Meteo API)→ EPW，可逐位元組重現；太陽幾何核對時間對齊 |
 | 可再生能源與負荷序列 | 光伏：GHI 歸一化經驗情景 + NREL PVWatts v5 物理情景；充電：省級月度統計 × 實測日際波動的隨機情景 |
 | 節能措施與經濟性 | 8 種 ECM 與組合、年省能/省錢、簡單回收期、電價與造價敏感度 |
-| 自動化 | Python 管線、平行模擬(MCP server 池)、DesignBuilder dsbXML 生成與 MCP 控制、煙霧測試 |
+| 自動化與重現性 | Python 管線、平行模擬(MCP server 池)、DesignBuilder dsbXML 生成與 MCP 控制、煙霧測試；GitHub Actions 每次 push 在 Linux 上重跑長興定版模型與 9 種節能措施，與倉庫結果比對；EnergyPlus 路徑自動偵測(或設 `ENERGYPLUS_DIR`)，不綁定特定電腦 |
 
 ## 代表作：長興服務區光儲充負荷建模
 
@@ -174,8 +176,15 @@ python tests/smoke.py
   uv pip install --python tools/modeler/.venv/Scripts/python.exe -r tools/modeler/requirements.txt
   ```
 
-腳本裡的 EnergyPlus 與 Python 路徑目前寫死成這台機器的位置(`batch_driver.py` 的 `EP`、
-`tools/modeler/build_idf.py` 的 `EP` / `DSH_PY`),換機器要改這幾行。
+EnergyPlus 路徑由 [eplus_paths.py](eplus_paths.py) 自動尋找:環境變數 `ENERGYPLUS_DIR` → PATH 上的 `energyplus` → 各平台預設安裝位置
+(Windows `C:\EnergyPlusV26-2-0` 或 `%LOCALAPPDATA%\Programs\EnergyPlusV26-2-0\*`、Linux `/usr/local/EnergyPlus-26-2-0`、macOS `/Applications/EnergyPlus-26-2-0`)。
+DesignBuilder MCP 跑節能報告用的 Python 可用 `REPORT_PYTHON` 指定。
+
+不需 MCP server 的重現性檢查(CI 跑的就是這個):
+
+```
+uv run --with eppy python tests/ci_check.py
+```
 
 ## 限制
 

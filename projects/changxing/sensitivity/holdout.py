@@ -1,6 +1,6 @@
 """留出驗證(hold-out cross-validation)。
 
-    vendor/EnergyPlus-MCP/energyplus-mcp-server/.venv/Scripts/python.exe projects/changxing/sensitivity/holdout.py
+    uv run --with eppy python projects/changxing/sensitivity/holdout.py
 
 定版校準每個鐘點各有一個營業強度, 24 個自由度對 24 個點, 留出的鐘點沒有任何資訊可用, 所以無法做留出檢驗。
 這裡改用低自由度模型: 營業強度只按 7 個營業時段各取一個值(分攤負荷 eq_bus 取 0、站房支路 5 取設計值 1),

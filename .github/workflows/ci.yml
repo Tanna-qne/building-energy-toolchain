@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  reproduce:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      EPLUS_TARBALL: EnergyPlus-26.2.0-4bd7a1f26f-Linux-Ubuntu24.04-x86_64
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache EnergyPlus 26.2
+        id: eplus-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/energyplus
+          key: ${{ env.EPLUS_TARBALL }}
+
+      - name: Install EnergyPlus 26.2
+        if: steps.eplus-cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p ~/energyplus
+          curl -fsSL "https://github.com/NREL/EnergyPlus/releases/download/v26.2.0/${EPLUS_TARBALL}.tar.gz" \
+            | tar -xz -C ~/energyplus --strip-components=1
+
+      - uses: astral-sh/setup-uv@v6
+
+      - name: Reproduce Changxing results
+        run: |
+          export ENERGYPLUS_DIR="$HOME/energyplus"
+          "$ENERGYPLUS_DIR/energyplus" --version
+          uv run --python 3.12 --with eppy python tests/ci_check.py

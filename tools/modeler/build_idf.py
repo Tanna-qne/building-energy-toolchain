@@ -37,7 +37,9 @@ for stream in (sys.stdout, sys.stderr):
     if hasattr(stream, "reconfigure"):
         stream.reconfigure(encoding="utf-8", errors="replace")
 
-EP = Path(r"C:/Users/kiri/AppData/Local/Programs/EnergyPlusV26-2-0/EnergyPlus-26.2.0-4bd7a1f26f-Windows-x86_64")
+sys.path.insert(0, str(WS))
+from eplus_paths import energyplus_dir  # noqa: E402
+EP = energyplus_dir()
 EPW = EP / "WeatherData" / "USA_IL_Chicago-OHare.Intl.AP.725300_TMY3.epw"  # 同 batch_driver.WEATHER
 BUILT = WS / "db_models" / "built"
 HVAC_TYPES = {t: cls for cls in (VAV, PSZ, PTAC) for t in cls.EQUIPMENT_TYPES}

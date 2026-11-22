@@ -1,6 +1,6 @@
 """Morris 全域敏感度分析(Morris 1991; μ* 依 Campolongo et al. 2007)。
 
-    vendor/EnergyPlus-MCP/energyplus-mcp-server/.venv/Scripts/python.exe projects/changxing/sensitivity/morris.py
+    uv run --with eppy python projects/changxing/sensitivity/morris.py
 
 14 個不參與校準的物理參數, 4 個水準、r = 10 條軌跡, 共 r × (k + 1) = 150 次全年模擬。
 校準量(營業排程、分攤負荷、站房支路)固定為定版值, 因此結果回答兩個問題:

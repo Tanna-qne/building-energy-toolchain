@@ -1,6 +1,6 @@
 """冬季供暖 + 重新校準: 由定版 cx_lowest_max.idf 產生 cx_winter_heating.idf。
 
-    vendor/EnergyPlus-MCP/energyplus-mcp-server/.venv/Scripts/python.exe projects/changxing/winter_heating/calibrate.py
+    uv run --with eppy python projects/changxing/winter_heating/calibrate.py
 
 1. 空調可用時段(ac_*)原本只有 5/1–9/30 開; 改成全年都用 5–9 月的每日時段。冷 / 熱由恆溫器依
    洪章飛論文表 4.6 的設定溫度決定(夏季 25–26 °C、冬季 20–22 °C), 過渡季室溫在兩者之間時不運行。
@@ -21,7 +21,9 @@ ROOT = HERE.parent
 SRC = ROOT / "cx_lowest_max.idf"
 OUT_IDF = HERE / "cx_winter_heating.idf"
 EPW = ROOT / "weather" / "CHN_Changxing_ERA5_31.00N_120.00E_2025.epw"
-EP = Path(r"C:/Users/kiri/AppData/Local/Programs/EnergyPlusV26-2-0/EnergyPlus-26.2.0-4bd7a1f26f-Windows-x86_64")
+sys.path.insert(0, str(ROOT.parents[1]))
+from eplus_paths import energyplus_dir, energyplus_exe  # noqa: E402
+EP, EP_EXE = energyplus_dir(), energyplus_exe()
 RUN = HERE / "run"
 AC = ["ac_comm", "ac_dining", "ac_dorm", "ac_office", "ac_shop_n"]
 TOL_KW = 1.5          # 每個鐘點容許偏差
@@ -140,7 +142,7 @@ def bus_design_kw(idf):
 def simulate(idf_path):
     shutil.rmtree(RUN, ignore_errors=True)
     RUN.mkdir(parents=True)
-    r = subprocess.run([str(EP / "energyplus.exe"), "-w", str(EPW), "-d", str(RUN), "-r", str(idf_path)],
+    r = subprocess.run([str(EP_EXE), "-w", str(EPW), "-d", str(RUN), "-r", str(idf_path)],
                        capture_output=True, text=True, stdin=subprocess.DEVNULL)
     if r.returncode:
         raise SystemExit((RUN / "eplusout.err").read_text(encoding="latin-1")[-2000:])

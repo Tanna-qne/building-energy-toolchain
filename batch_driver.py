@@ -15,7 +15,9 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 SERVER_DIR = HERE / "vendor/EnergyPlus-MCP/energyplus-mcp-server"
-EP = Path(r"C:/Users/kiri/AppData/Local/Programs/EnergyPlusV26-2-0/EnergyPlus-26.2.0-4bd7a1f26f-Windows-x86_64")
+sys.path.insert(0, str(HERE))
+from eplus_paths import energyplus_dir  # noqa: E402
+EP = energyplus_dir()
 # 預設 Chicago; 設環境變數 EPW=<.epw 路徑> 可換氣象檔(只影響模擬, 參數建模的設計日仍是 Chicago)
 WEATHER = Path(os.environ.get("EPW") or EP / "WeatherData" / "USA_IL_Chicago-OHare.Intl.AP.725300_TMY3.epw")
 MODELS = SERVER_DIR / "sample_files/batch"

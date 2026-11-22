@@ -1,8 +1,8 @@
 """長興服務區: 工具鏈 8 種節能措施 + 全部組合, 全年 EnergyPlus 模擬, 並看對 7 月光伏消納的影響。
 
-    vendor/EnergyPlus-MCP/energyplus-mcp-server/.venv/Scripts/python.exe projects/changxing/ecm/ecm.py
+    uv run --with eppy python projects/changxing/ecm/ecm.py
 
-措施定義與工具鏈(scan2/scan2.py、tools/modeler/build_idf.py、EnergyPlus-MCP utils/retrofit.py)相同,
+措施定義與工具鏈(scan2/scan2.py、tools/modeler/build_idf.py、tools/retrofit.py)相同,
 只有一處依長興的系統調整: 長興是分體熱泵(PTHP), 高效率空調同時提高製冷與製熱 COP(工具鏈只改製冷)。
 基準是定版模型 cx_lowest_max.idf; 營業排程、分攤負荷與充電序列不動, 所以省下的電全部來自建築本身。
 """
@@ -14,7 +14,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
 sys.path.insert(0, str(ROOT / "sensitivity"))
-sys.path.insert(0, str(ROOT.parents[1] / "vendor/EnergyPlus-MCP/energyplus-mcp-server/energyplus_mcp_server/utils"))
+sys.path.insert(0, str(ROOT.parents[1] / "tools"))
 from common import BASE_IDF, EP, run_many  # noqa: E402
 from eppy.modeleditor import IDF  # noqa: E402
 from retrofit import upgrade_hvac_efficiency, upgrade_insulation  # noqa: E402
