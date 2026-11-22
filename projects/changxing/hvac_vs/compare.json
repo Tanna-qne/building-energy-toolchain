@@ -1,0 +1,50 @@
+{
+ "singlespeed": {
+  "annual_MWh": 1472.1013341160576,
+  "july_MWh": 149.8860010955948,
+  "peak_kW": 520.9364540760821,
+  "heating_MWh": 67.2394696352863,
+  "cooling_MWh": 225.5056345185182,
+  "cvrmse_pct": 0.0985406339465717,
+  "nmbe_pct": 0.055767973267874894,
+  "summer_ratio": 1.249168913974837,
+  "winter_ratio": 1.0574963481897228,
+  "fans_MWh": 108.88818094152353,
+  "station_total_MWh": 1483.0513341160577,
+  "coils_MWh": {
+   "Cooling Coil Total Cooling Energy": 854.7509256062912,
+   "Cooling Coil Electricity Energy": 225.5056345185182,
+   "Heating Coil Heating Energy": 175.20489318935148,
+   "Heating Coil Electricity Energy": 61.88899246864078,
+   "Heating Coil Defrost Electricity Energy": 1.89843675586437,
+   "Heating Coil Heating Energy (supplemental)": 3.4520404107811054,
+   "Heating Coil Electricity Energy (supplemental)": 3.4520404107811054
+  },
+  "seasonal_cop_cooling": 3.790375027352588,
+  "seasonal_cop_heating": 2.8309540388483136
+ },
+ "variable_speed": {
+  "annual_MWh": 1470.765839266523,
+  "july_MWh": 149.96395914406716,
+  "peak_kW": 533.1665941663227,
+  "heating_MWh": 52.217523829512885,
+  "cooling_MWh": 200.94314921384452,
+  "cvrmse_pct": 0.060250895418907026,
+  "nmbe_pct": -0.03894728777361419,
+  "summer_ratio": 1.243876017895975,
+  "winter_ratio": 1.0565947001840144,
+  "fans_MWh": 83.58041629581552,
+  "station_total_MWh": 1481.715839266523,
+  "coils_MWh": {
+   "Cooling Coil Electricity Energy": 200.94314921384452,
+   "Cooling Coil Total Cooling Energy": 887.9271787842431,
+   "Heating Coil Electricity Energy": 50.06558810019092,
+   "Heating Coil Heating Energy": 163.3666444422968,
+   "Heating Coil Defrost Electricity Energy": 1.6919815971901986,
+   "Heating Coil Heating Energy (supplemental)": 0.4599541321317672,
+   "Heating Coil Electricity Energy (supplemental)": 0.4599541321317672
+  },
+  "seasonal_cop_cooling": 4.4187979647880775,
+  "seasonal_cop_heating": 3.263052540506836
+ }
+}

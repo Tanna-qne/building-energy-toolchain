@@ -3,7 +3,7 @@
     uv run --with eppy python projects/changxing/ecm/ecm.py
 
 措施定義與工具鏈(scan2/scan2.py、tools/modeler/build_idf.py、tools/retrofit.py)相同,
-只有一處依長興的系統調整: 長興是分體熱泵(PTHP), 高效率空調同時提高製冷與製熱 COP(工具鏈只改製冷)。
+只有一處依長興的系統調整: 長興是變頻分體熱泵(PTHP + 變速盤管), 高效率空調把製冷與製熱各速 COP 一起 ×1.25(工具鏈只改單速製冷)。
 基準是定版模型 cx_lowest_max.idf; 營業排程、分攤負荷與充電序列不動, 所以省下的電全部來自建築本身。
 """
 import csv
@@ -15,7 +15,7 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
 sys.path.insert(0, str(ROOT / "sensitivity"))
 sys.path.insert(0, str(ROOT.parents[1] / "tools"))
-from common import BASE_IDF, EP, run_many  # noqa: E402
+from common import BASE_IDF, EP, run_many, scale_vs_cop  # noqa: E402
 from eppy.modeleditor import IDF  # noqa: E402
 from retrofit import upgrade_hvac_efficiency, upgrade_insulation  # noqa: E402
 
@@ -67,11 +67,9 @@ def insulation(i, notes):
 
 
 def hvac(i, notes):
-    ch = upgrade_hvac_efficiency(i, cop_factor=COP_FACTOR)
-    for o in i.idfobjects["COIL:HEATING:DX:SINGLESPEED"]:
-        old = float(o.Gross_Rated_Heating_COP)
-        o.Gross_Rated_Heating_COP = round(old * COP_FACTOR, 3)
-        ch.append({"field": "Gross_Rated_Heating_COP", "old": old, "new": o.Gross_Rated_Heating_COP})
+    ch = upgrade_hvac_efficiency(i, cop_factor=COP_FACTOR)  # 這裡只改到風機效率(工具鏈的欄位表沒有變頻盤管)
+    for kind, old, new in scale_vs_cop(i, COP_FACTOR):  # 變頻盤管各速 COP 一起 ×1.25
+        ch.append({"field": "額定製冷 COP" if "COOLING" in kind else "額定製熱 COP", "old": old, "new": new})
     seen = {}
     for c in ch:
         seen.setdefault(c["field"], c)

@@ -47,3 +47,7 @@ projects/changxing/sensitivity/_runs/
 projects/changxing/sensitivity/_holdout/
 projects/changxing/ecm/_runs/
 site/data.json
+projects/changxing/hvac_vs/run/
+projects/changxing/hvac_vs/_trial/
+projects/changxing/hvac_vs/_runs/
+projects/changxing/hvac_vs/cx_vs_*.idf

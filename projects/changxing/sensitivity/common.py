@@ -46,6 +46,29 @@ def _num(x):
         return None
 
 
+VS_COILS = ("COIL:COOLING:DX:VARIABLESPEED", "COIL:HEATING:DX:VARIABLESPEED")
+
+
+def vs_cops(o):
+    """變頻盤管各速的 (欄位名, COP)。"""
+    tag = "Cooling" if "COOLING" in o.key.upper() else "Heating"
+    fields = [f"Speed_{s}_Reference_Unit_Gross_Rated_{tag}_COP" for s in range(1, int(float(o.Number_of_Speeds)) + 1)]
+    return [(f, float(o[f])) for f in fields]
+
+
+def scale_vs_cop(idf, factor):
+    """所有變頻盤管各速 COP ×factor。回傳 [(盤管類別, 額定速度原 COP, 新 COP)]。"""
+    out = []
+    for kind in VS_COILS:
+        for o in idf.idfobjects[kind]:
+            cops = vs_cops(o)
+            for f, v in cops:
+                o[f] = round(v * factor, 4)
+            nominal = cops[int(float(o.Nominal_Speed_Level)) - 1][1]
+            out.append((kind, nominal, round(nominal * factor, 4)))
+    return out
+
+
 class Model:
     """載入一次定版 IDF, 記下被修改欄位的原值; apply() 每次都從原值計算, 不會累積誤差。"""
 
@@ -62,6 +85,7 @@ class Model:
         self.equip = [(o, o.Watts_per_Floor_Area) for o in i.idfobjects["ELECTRICEQUIPMENT"]]
         self.kitchen = [(o, o.Design_Level) for o in i.idfobjects["OTHEREQUIPMENT"]
                         if o.EndUse_Subcategory == "KitchenAppliances"]
+        self.cop = {kind: [(o, vs_cops(o)) for o in i.idfobjects[kind]] for kind in VS_COILS}
         self.setpt = {}
         for o in i.idfobjects["SCHEDULE:DAY:INTERVAL"]:
             for tag in ("cool", "heat"):
@@ -93,10 +117,11 @@ class Model:
             o.Watts_per_Floor_Area = v * p["epd"]
         for o, v in self.kitchen:
             o.Design_Level = v * p["kitchen"]
-        for o in i.idfobjects["COIL:COOLING:DX:SINGLESPEED"]:
-            o.Gross_Rated_Cooling_COP = p["cop_c"]
-        for o in i.idfobjects["COIL:HEATING:DX:SINGLESPEED"]:
-            o.Gross_Rated_Heating_COP = p["cop_h"]
+        for kind, key in (("COIL:COOLING:DX:VARIABLESPEED", "cop_c"), ("COIL:HEATING:DX:VARIABLESPEED", "cop_h")):
+            for o, base in self.cop[kind]:  # 額定速度的 COP 設為參數值, 其他各速按同一比例縮放
+                nominal = base[int(float(o.Nominal_Speed_Level)) - 1][1]
+                for f, v in base:
+                    o[f] = round(v * p[key] / nominal, 4)
         for tag, key in (("cool", "t_cool"), ("heat", "t_heat")):
             for o, vals in self.setpt.get(tag, []):
                 for k, v in vals:
