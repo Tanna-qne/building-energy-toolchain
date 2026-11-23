@@ -4,7 +4,8 @@
 
 1. 所有 Python 檔可以編譯(語法檢查);
 2. 長興定版模型重跑全年, 逐時用電與倉庫裡公開的 hourly_2025.csv 一致;
-3. 長興 9 種節能措施重跑, 節電量與倉庫裡的 ecm_results.csv 一致。
+3. 長興 9 種節能措施重跑, 節電量與倉庫裡的 ecm_results.csv 一致;
+4. tools/eplus_summary.py 讀 EnergyPlus 範例 5ZoneAirCooled 的報表, 電與天然氣和 scan2/results.csv 的基準一致。
 跨平台浮點有微小差異, 所以用容許誤差比較, 不要求逐位元相同。
 """
 import csv
@@ -71,7 +72,29 @@ def check_ecm():
     print("[ok] 節能措施重現 ecm_results.csv")
 
 
+def check_summary():
+    from common import EP, EP_EXE
+    sys.path.insert(0, str(WS / "tools"))
+    from eplus_summary import summarize, to_markdown
+    with open(WS / "scan2" / "results.csv", encoding="utf-8-sig") as f:
+        ref = next(r for r in csv.DictReader(f) if r["model"] == "5ZoneAirCooled" and r["case"] == "baseline")
+    with tempfile.TemporaryDirectory() as tmp:
+        subprocess.run([str(EP_EXE), "-w", str(EP / "WeatherData" / "USA_IL_Chicago-OHare.Intl.AP.725300_TMY3.epw"),
+                        "-d", tmp, "-r", str(EP / "ExampleFiles" / "5ZoneAirCooled.idf")],
+                       capture_output=True, check=True, stdin=subprocess.DEVNULL)
+        s = summarize(Path(tmp))
+        to_markdown(s)
+    fuels = s["by_fuel_kWh"]
+    for key, fuel in (("elec_kwh", "Electricity"), ("gas_kwh", "Natural Gas")):
+        want, got = float(ref[key]), fuels[fuel]
+        print(f"  {fuel:12s} scan2 {want:10,.1f}  摘要 {got:10,.1f} kWh")
+        assert abs(got - want) <= 0.01 * want, f"{fuel} 摘要與 scan2 結果差超過 1%"
+    assert abs(sum(u["kWh"] for u in s["end_uses"]) - s["site_kWh"]) <= 0.01 * s["site_kWh"], "分項加總與總用能不符"
+    print("[ok] eplus_summary 讀報表正確")
+
+
 if __name__ == "__main__":
     check_compile()
     check_baseline()
     check_ecm()
+    check_summary()

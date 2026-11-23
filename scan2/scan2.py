@@ -15,7 +15,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from batch_driver import Mcp, meter_kwh, sim_args, MODELS as MODELS_DIR  # noqa: E402
 from scan.scan import lighting_scaled_updates, parse  # noqa: E402
-from building_report import write_html  # noqa: E402
+from building_report import MEASURES, num, verdict, write_html, yrs  # noqa: E402
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -454,26 +454,48 @@ def scan_parallel(models, models_dir: Path, workers: int = min(4, os.cpu_count()
     return [r for rows in results for r in rows]
 
 
+def _fmt(v, d=0):
+    x = num(v)
+    return "" if x is None else f"{x:,.{d}f}"
+
+
 def write_outputs(rows, out_dir: Path, meta=None):
-    """寫出 results.csv、report.md 與給一般人看的 report.html。meta: {模型名: 建模參數}。"""
+    """寫出 results.csv、report.md 與給一般人看的 report.html。meta: {模型名: 建模參數}。
+    results.csv 前面的欄位給程式讀(名稱不改); 最後兩欄「措施名稱」「判讀」給人看。"""
     if not rows:
         raise SystemExit("沒有任何結果可寫出")
+    for r in rows:
+        r["措施名稱"] = "現況(基準)" if r["case"] == "baseline" else MEASURES.get(r["case"], (r["case"],))[0]
+        r["判讀"] = "" if r["case"] == "baseline" else verdict(r)[2]
     with open(out_dir / "results.csv", "w", newline="", encoding="utf-8-sig") as f:
         w = csv.DictWriter(f, fieldnames=list(rows[0]))
         w.writeheader()
         w.writerows(rows)
 
-    lines = ["# 措施組合與回收期", "",
-             f"- 貨幣 {COSTS['currency']}; 電價: {COSTS['price_per_kwh']}/kWh; 天然氣: {COSTS['gas_per_kwh']}/kWh(costs.json)",
-             f"- 貼膜: {COSTS['film_per_m2_glass']}/m² 玻璃; 照明: {COSTS['lighting_per_m2_floor']}/m² 樓地板(有照明的 Zone); "
-             f"屋頂反射漆: {COSTS['coolroof_per_m2_roof']}/m² 屋頂",
-             "- 年省 % 以總能源(電 + 天然氣)計",
-             "", f"| 模型 | 情境 | 用電 kWh | 天然氣 kWh | EUI kWh/m² | 年省 % | 年省 {COSTS['currency']} | 投資 {COSTS['currency']} | 回收年 | 備註 |",
-             "|---|---|---|---|---|---|---|---|---|---|"]
-    for r in rows:
-        lines.append(f"| {r['model']} | {r['case']} | {r['elec_kwh'] or ''} | {r['gas_kwh'] if r['gas_kwh'] is not None else ''} | "
-                     f"{r['eui_kwh_m2'] or ''} | {r['saving_pct'] if r['saving_pct'] is not None else ''} | "
-                     f"{r['saving_cost'] or ''} | {r['capex_cost'] or ''} | {r['payback_years'] or ''} | {r['error']} |")
+    cur = COSTS["currency"]
+    lines = ["# 節能措施與回本年數", "",
+             f"- 價格(costs.json 的假設值,不是報價):電 {COSTS['price_per_kwh']} {cur}/kWh、天然氣 {COSTS['gas_per_kwh']} {cur}/kWh;"
+             f"貼膜 {COSTS['film_per_m2_glass']}/m² 玻璃、燈具 {COSTS['lighting_per_m2_floor']}/m² 樓地板、"
+             f"屋頂反射漆 {COSTS['coolroof_per_m2_roof']}/m² 屋頂",
+             "- 「省能」以總能源(電 + 天然氣)計;回本 8 年內「值得考慮」、8–15 年「看情況」、超過 15 年「不太划算」"]
+    order = {"good": 0, "ok": 1, "info": 2, "bad": 3, "skip": 4}
+    for model in dict.fromkeys(r["model"] for r in rows):
+        mine = [r for r in rows if r["model"] == model]
+        base = next((r for r in mine if r["case"] == "baseline"), None)
+        lines += ["", f"## {model}", ""]
+        if base:
+            gas = f"、天然氣 {_fmt(base['gas_kwh'])} kWh" if num(base["gas_kwh"]) else ""
+            lines.append(f"現況:用電 {_fmt(base['elec_kwh'])} kWh{gas},單位面積 {_fmt(base['eui_kwh_m2'])} kWh/m²·年。"
+                         + (f" {base['error']}" if base["error"] else ""))
+            lines.append("")
+        lines += [f"| 措施 | 判讀 | 省能 | 每年省 {cur} | 投資 {cur} | 回本 | 說明 |", "|---|---|---:|---:|---:|---|---|"]
+        for r in sorted((r for r in mine if r["case"] != "baseline"), key=lambda r: order[verdict(r)[0]]):
+            level, _, label, why = verdict(r)
+            y = num(r["payback_years"])
+            pct = f"{num(r['saving_pct']):.1f}%" if num(r["saving_pct"]) is not None else "—"
+            note = r["error"] or ("" if level in ("good", "ok", "bad") else why)
+            lines.append(f"| {r['措施名稱']} | {label} | {pct} | {_fmt(r['saving_cost']) or '—'} | "
+                         f"{_fmt(r['capex_cost']) if num(r['capex_cost']) else '—'} | {yrs(y) if y else '—'} | {note} |")
     (out_dir / "report.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
     print("\n".join(lines))
     print(f"\n網頁報告: {write_html(rows, out_dir / 'report.html', COSTS, meta)}")

@@ -107,7 +107,7 @@ def test_compare_options():
 
 def test_modeler_bad_input():
     """參數填錯(選項不存在、欄位拼錯、L 形缺尺寸、JSON 格式錯): 一行說明原因, 不能噴 traceback。"""
-    for fx, text in (("bad.json", "hvac 要是其中之一"), ("bad_typo.json", "不認得的參數 storeys"),
+    for fx, text in (("bad.json", "hvac 不認得"), ("bad_typo.json", "不認得的參數 storeys"),
                      ("bad_L.json", "缺少 notch_width"), ("bad_json.json", "不是正確的 JSON")):
         code, log = run(WS / "run_building.py", FIX / fx, timeout=300)
         check(code != 0 and text in log and "Traceback" not in log, f"{fx}: 錯誤訊息不清楚:\n{log[-800:]}")

@@ -136,6 +136,8 @@
 
 **讓 agent 直接操作 DB**:`tools/designbuilder_mcp/` 是一個 MCP server(DSH 裡叫 `designbuilder`),
 可以讀模型、改屬性、用 DB 跑模擬、算節能措施、由參數建 DB 模型。工具清單與注意事項見 `handover/HARNESS.md` §7。
+工具回傳的是白話摘要:`db_status` 會顯示授權剩幾天;`db_simulate` 給全年用能、單位面積能耗、分項、用電峰值與溫度沒達標的時數
+(同時寫一份 `summary.md` 在輸出資料夾);`db_report_status` 依「值不值得做」排好每個措施。
 安裝:`uv venv tools/designbuilder_mcp/.venv --python 3.12`,再
 `uv pip install --python tools/designbuilder_mcp/.venv/Scripts/python.exe -r tools/designbuilder_mcp/requirements.txt`。
 
@@ -158,8 +160,13 @@ DB 預設的簡化空調是「理想負載」,只算出要供應多少冷 / 熱,
 | [LBNL EnergyPlus-MCP](https://github.com/LBNL-ETA/EnergyPlus-MCP) | 所有模型修改與模擬都透過它的工具 |
 | EnergyPlus 26.2 | 模擬引擎 |
 
-腳本:`tools/modeler/build_idf.py`(參數 → IDF)、`db_import.py`(升級 → 補電表 → 跑措施)、
-`scan2/scan2.py`(措施、組合、回收期,最多 4 個模擬平行)、`sensitivity.py`(電價 / 成本敏感度網頁)。
+腳本:`tools/modeler/build_idf.py`(參數 → IDF;建完會說明建了什麼、哪些參數用了預設值,拼錯會提示正確名稱)、`db_import.py`(升級 → 補電表 → 跑措施)、
+`scan2/scan2.py`(措施、組合、回收期,最多 4 個模擬平行)、`sensitivity.py`(電價 / 成本敏感度網頁)、
+`tools/eplus_summary.py`(任何 EnergyPlus 的 `eplustbl.htm` → 中文摘要,公制英制都換成 kWh、kW、m²)。
+
+```
+python tools/eplus_summary.py <eplustbl.htm 或輸出資料夾>
+```
 
 ## 檢查是不是都還能用
 

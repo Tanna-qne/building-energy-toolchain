@@ -14,20 +14,25 @@ DB 一次只能開一個; 工具在 DB 開著時會拒絕執行, 不會關掉使
 用 venv 的「基底」Python 執行, 不要用 .venv/Scripts/python.exe: 在 venv 啟動器底下開的子程序裡,
 E+ 的 Transition(版本升級)會當掉(HANDOVER 坑 18), 節能報告就跑不出來。套件從 .venv 載入。
 """
+import csv
 import json
 import os
 import re
 import shutil
 import site
 import subprocess
+import sys
 import time
 import xml.etree.ElementTree as ET
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Optional
 
 HERE = Path(__file__).resolve().parent
 site.addsitedir(str(HERE / ".venv" / "Lib" / "site-packages"))  # addsitedir 會處理 .pth(pywin32 需要)
+sys.path[:0] = [str(HERE.parent), str(HERE.parents[1])]
+from building_report import MEASURES, num, verdict, yrs  # noqa: E402  白話措施名稱與「值不值得做」的判讀
+from eplus_summary import summarize, to_markdown  # noqa: E402
 
 from db_process import ProcessChain, Screen, find_designbuilder, is_running, kill_process  # noqa: E402
 from mcp.server.fastmcp import FastMCP  # noqa: E402
@@ -67,7 +72,10 @@ def _close_db():
     for _ in range(3):
         if not is_running():
             return True
-        kill_process()
+        try:
+            kill_process()
+        except Exception:  # noqa: BLE001  以系統管理員身分執行的 DB: psutil.AccessDenied, 關不掉就請使用者關
+            return False
         time.sleep(3)
     return not is_running()
 
@@ -137,30 +145,49 @@ def _attrs(el) -> dict:
     return {x.get("key"): (x.text or "") for x in a} if a is not None else {}
 
 
-def _site_energy(htm: Path):
-    """eplustbl.htm 的 Total Site Energy 與面積(DB 報表常是英制, 一律換成 kWh / m²)。"""
-    text = htm.read_text(encoding="latin-1")
-    m = re.search(r"Total Site Energy</td>\s*<td[^>]*>\s*([\d.,]+)", text)
-    unit = re.search(r"<td align=\"right\">Total Energy \[(\w+)\]", text)
-    area = re.search(r"Total Building Area</td>\s*<td[^>]*>\s*([\d.,]+)", text)
-    area_unit = re.search(r"Area \[(m2|ft2)\]", text)
-    if not m:
-        return None
-    energy = float(m.group(1).replace(",", ""))
-    u = unit.group(1) if unit else "GJ"
-    kwh = energy * {"GJ": 277.7778, "kBtu": 0.293071, "MWh": 1000, "kWh": 1}.get(u, 277.7778)
-    out = {"site_energy_kwh": round(kwh)}
-    if area:
-        a = float(area.group(1).replace(",", ""))
-        a = a * 0.09290304 if area_unit and area_unit.group(1) == "ft2" else a
-        out.update(floor_m2=round(a, 1), eui_kwh_m2=round(kwh / a, 1) if a else None)
+LICENCE_DIR = Path(os.environ.get("PROGRAMDATA", r"C:\ProgramData")) / "DesignBuilder" / "Licences"
+MODULES = {"EP": "EnergyPlus 模擬", "HV": "HVAC 詳細系統", "DY": "採光", "OP": "最佳化"}  # 其他代碼含義未確認, 原樣顯示
+
+
+def _licences():
+    """[(模組代碼, 到期日)]; 讀不到回傳空清單。"""
+    out = []
+    for f in sorted(LICENCE_DIR.glob("*.lic")) if LICENCE_DIR.exists() else []:
+        m = re.search(r"(\d{1,2})-([a-z]{3})-(\d{4})", f.read_text(encoding="latin-1", errors="replace"))
+        if m:
+            d = datetime.strptime(f"{m.group(1)}-{m.group(2)}-{m.group(3)}", "%d-%b-%Y").date()
+            out.append((f.stem.split("-")[-1], d))
     return out
+
+
+def _err_lines(err: str, n=5):
+    """eplusout.err 裡最值得看的幾行: Severe / Fatal 優先。"""
+    bad = [ln.strip() for ln in err.splitlines() if "** Severe" in ln or "Fatal" in ln]
+    return bad[:n] or [ln.strip() for ln in err.strip().splitlines()[-n:]]
 
 
 @mcp.tool()
 def db_status() -> str:
-    """DesignBuilder 有沒有在執行、執行檔在哪裡。其他工具都需要 DB 沒開著。"""
-    return json.dumps({"running": is_running(), "exe": str(find_designbuilder())}, ensure_ascii=False)
+    """DesignBuilder 有沒有在執行、執行檔在哪裡、授權哪天到期。其他工具都需要 DB 沒開著。"""
+    lines = ["## DesignBuilder 狀態", ""]
+    running = is_running()
+    lines.append("- **正在執行**:其他 DB 工具要等使用者存檔關掉 DB 才能用。" if running else "- 沒有在執行,可以使用其他工具。")
+    try:
+        lines.append(f"- 執行檔:`{find_designbuilder()}`")
+    except Exception as e:  # noqa: BLE001
+        lines.append(f"- **找不到 DesignBuilder 執行檔**:{e}")
+    lic = _licences()
+    if lic:
+        soonest = min(d for _, d in lic)
+        left = (soonest - date.today()).days
+        mods = "、".join(sorted({MODULES.get(c, c) for c, _ in lic}))
+        when = "**已過期**" if left < 0 else "**今天到期**" if left == 0 else f"還有 {left} 天"
+        lines.append(f"- 授權到 {soonest:%Y-%m-%d}({when});模組:{mods}。")
+        if left <= 7:
+            lines.append("  授權到期後 DB 的模擬與計算都不能用,需要續約。")
+    else:
+        lines.append(f"- 讀不到授權檔({LICENCE_DIR})。")
+    return "\n".join(lines)
 
 
 @mcp.tool()
@@ -228,6 +255,11 @@ def db_simulate(dsb_path: str, attributes: Optional[dict] = None, start_date: st
             _newer_than(DB_EP_DIR / "eplustbl.htm", started)()
 
     secs, closed = _run_chain(dsb, chain, timeout_s, finished)
+    return _collect(dsb_path, dsb, started, secs, closed)
+
+
+def _collect(dsb_path, dsb: Path, started: float, secs, closed=True):
+    """把 DB 這次(started 之後)寫出的 E+ 結果複製到模型副本旁的 sim_<時間>/, 再寫摘要。"""
     out = dsb.parent / datetime.now().strftime("sim_%Y%m%d_%H%M%S")
     out.mkdir()
     # in.epw 是 DB 從氣象庫複製的, 保留原檔的舊時間, 不能用時間判斷; 只要這次有新的 in.idf 就一起收
@@ -237,14 +269,30 @@ def db_simulate(dsb_path: str, attributes: Optional[dict] = None, start_date: st
     for f in fresh:
         shutil.copyfile(DB_EP_DIR / f, out / f)
     err = (out / "eplusout.err").read_text(encoding="latin-1") if (out / "eplusout.err").exists() else ""
+    return _simulate_report(dsb_path, out, err, secs, closed)
+
+
+def _simulate_report(dsb_path, out: Path, err: str, secs, closed=True):
     ok = "EnergyPlus Completed Successfully" in err
-    result = {"output_dir": str(out), "success": ok, "seconds": secs, "files": fresh,
-              "err_summary": err.strip().splitlines()[-1] if err.strip() else "沒有產生 eplusout.err(模擬沒有執行)"}
-    if not closed:
-        result["note"] = CLOSE_NOTE
+    warn = len(re.findall(r"\*\* Warning \*\*", err))
+    lines = []
     if ok and (out / "eplustbl.htm").exists():
-        result.update(_site_energy(out / "eplustbl.htm") or {})
-    return json.dumps(result, ensure_ascii=False)
+        md = to_markdown(summarize(out / "eplustbl.htm"), title=f"{Path(dsb_path).stem}:年度模擬完成({secs} 秒)")
+        (out / "summary.md").write_text(md, encoding="utf-8")
+        lines.append(md)
+        if warn:
+            lines.append(f"EnergyPlus 有 {warn} 個警告(一般不影響結果,細節在 eplusout.err)。")
+        lines.append("下一步:要算節能措施和回本年數,呼叫 `db_measures_report`,output_dir 填下面的資料夾。")
+    elif ok:
+        lines += ["## 模擬完成,但沒有產生 eplustbl.htm", "", "DB 的輸出設定可能關掉了表格報告。"]
+    else:
+        lines += ["## 模擬沒有成功", ""]
+        lines += [f"    {ln}" for ln in _err_lines(err)] if err else [
+            "沒有產生 eplusout.err:EnergyPlus 沒有啟動。常見原因是 DB 停在對話框(缺氣象檔、模型錯誤),請使用者看一下 DB 畫面。"]
+    lines.append(f"\n輸出資料夾:`{out}`")
+    if not closed:
+        lines.append(CLOSE_NOTE)
+    return "\n".join(lines)
 
 
 @mcp.tool()
@@ -267,7 +315,9 @@ def db_measures_report(output_dir: str) -> str:
     epw = d / "in.epw"
     subprocess.Popen(stdin=subprocess.DEVNULL, args=[str(MAIN_PY), str(WS / "tools" / "designbuilder" / "from_db.py"), str(idf),
                       str(epw) if epw.exists() else ""], cwd=WS, creationflags=subprocess.CREATE_NO_WINDOW)
-    return json.dumps({"report": str(d / "report.html"), "log": str(d / "run.log")}, ensure_ascii=False)
+    return "\n".join(["## 節能措施報告開始計算", "",
+                      "在背景跑基準與 8 種措施,約 5–10 分鐘。用 `db_report_status` 查進度(output_dir 同上)。", "",
+                      f"- 完成後的報告:`{d / 'report.html'}`", f"- 進度紀錄:`{d / 'run.log'}`"])
 
 
 @mcp.tool()
@@ -276,14 +326,31 @@ def db_report_status(output_dir: str) -> str:
     d = Path(output_dir)
     log = (d / "run.log").read_text(encoding="utf-8", errors="replace") if (d / "run.log").exists() else ""
     if "完成" not in log:
-        failed = "Traceback" in log
-        return json.dumps({"done": failed, "failed": failed, "log_tail": log.strip().splitlines()[-5:]},
-                          ensure_ascii=False)
-    import csv
+        tail = "\n".join(f"    {ln}" for ln in log.strip().splitlines()[-5:]) or "    (還沒有輸出)"
+        if "Traceback" in log:
+            return f"## 節能報告失敗\n\n最後幾行紀錄:\n{tail}\n\n完整紀錄:`{d / 'run.log'}`"
+        return f"## 還在算(通常 5–10 分鐘)\n\n最後幾行紀錄:\n{tail}"
+    return _measures_table(d)
+
+
+def _measures_table(d: Path):
     with open(d / "results.csv", encoding="utf-8-sig") as f:
-        rows = [{k: r[k] for k in ("case", "success", "saving_pct", "saving_cost", "capex_cost", "payback_years",
-                                   "currency", "error")} for r in csv.DictReader(f)]
-    return json.dumps({"done": True, "report": str(d / "report.html"), "measures": rows}, ensure_ascii=False)
+        rows = list(csv.DictReader(f))
+    cur = rows[0].get("currency", "") if rows else ""
+    lines = ["## 節能措施結果", "", f"| 措施 | 判讀 | 省能 | 每年省 {cur} | 投資 {cur} | 回本 |", "|---|---|---:|---:|---:|---|"]
+    order = {"good": 0, "ok": 1, "info": 2, "bad": 3, "skip": 4}
+    for r in sorted((r for r in rows if r["case"] in MEASURES), key=lambda r: order[verdict(r)[0]]):
+        level, _, label, why = verdict(r)
+        name = MEASURES[r["case"]][0]
+        if level == "skip":
+            lines.append(f"| {name} | {label} | — | — | — | {why} |")
+            continue
+        y = float(r["payback_years"]) if r["payback_years"] else None
+        capex = f"{float(r['capex_cost']):,.0f}" if num(r["capex_cost"]) else "—"
+        lines.append(f"| {name} | {label} | {float(r['saving_pct']):.1f}% | {float(r['saving_cost'] or 0):,.0f} | "
+                     f"{capex} | {yrs(y) if y else '—'} |")
+    lines += ["", "金額是 costs.json 的假設值,不是報價。", f"給使用者看的完整報告:`{d / 'report.html'}`"]
+    return "\n".join(lines)
 
 
 @mcp.tool()
@@ -306,8 +373,10 @@ def db_calculate(dsb_path: str, kind: str, timeout_s: int = 3600) -> str:
     dsb = _working_copy(dsb_path)
     # 結果存回模型檔; 以 .dsb 被 DB 存檔當作完成(未實測, DB 若不自動存檔會等到逾時)
     secs, closed = _run_chain(dsb, chains[kind], timeout_s, _newer_than(dsb, time.time()))
-    return json.dumps({"model_copy": str(dsb), "seconds": secs, **({} if closed else {"note": CLOSE_NOTE})},
-                      ensure_ascii=False)
+    lines = [f"## {kind} 計算完成({secs} 秒)", "", f"結果存在模型副本 `{dsb}`;用 `db_open` 打開它,在 DB 的結果頁查看。"]
+    if not closed:
+        lines.append(CLOSE_NOTE)
+    return "\n".join(lines)
 
 
 @mcp.tool()

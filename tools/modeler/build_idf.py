@@ -7,6 +7,7 @@
 + honeybee-openstudio(轉 OpenStudio -> IDF)。這裡只負責把參數接起來。
 不要從這支直接啟動 db_import: 由這個 venv 的 Python 帶起的 E+ Transition 程式會當掉。
 """
+import difflib
 import json
 import os
 import re
@@ -145,13 +146,28 @@ def upgrade_hvac(os_model):
     return "、".join(out)
 
 
+def _choose(key, value, options, common=()):
+    """value 不在 options 裡時, 給「是不是要 …」的建議, 再列常用選項(選項很多時不全部印出)。"""
+    if str(value) in options:
+        return
+    near = [o for o in options if o.lower().startswith(str(value).lower())][:3] or         difflib.get_close_matches(str(value), list(options), n=3, cutoff=0.5)
+    msg = f"{key} 不認得 {value!r}"
+    if near:
+        msg += f",是不是要 {' / '.join(near)}?"
+    shown = list(common) or sorted(options)
+    msg += f" 常用的有: {', '.join(shown)}" + (f"(共 {len(options)} 種)" if len(options) > len(shown) else "")
+    raise ValueError(msg)
+
+
+COMMON_TYPES = ("MediumOffice", "SmallOffice", "LargeOffice", "Retail", "SmallHotel", "PrimarySchool", "Hospital")
+COMMON_HVAC = ("VAV_Chiller_Boiler", "PSZAC_GasCoil", "PTAC_ElectricBaseboard")
+
+
 def build(p, cs=None, hvac_upgrade=False):
     """cs: 指定構造組(加強隔熱的變體用); hvac_upgrade: 設備改成高效率款(高效率空調的變體用)。
     回傳 (IDF workspace, honeybee 模型, 設備升級說明)。"""
-    if p["building_type"] not in BUILDING_TYPES:
-        raise ValueError(f"building_type 要是其中之一: {', '.join(BUILDING_TYPES)}")
-    if p["hvac"] not in HVAC_TYPES:
-        raise ValueError(f"hvac 要是其中之一: {', '.join(HVAC_TYPES)}")
+    _choose("building_type", p["building_type"], BUILDING_TYPES, COMMON_TYPES)
+    _choose("hvac", p["hvac"], HVAC_TYPES, COMMON_HVAC)
 
     # 夠大才切周邊 / 核心區; 太窄切了會產生極小的 zone
     narrow = min(p["width"], p["depth"]) if p["shape"] == "rect" else \
@@ -191,7 +207,9 @@ def validate(p):
     known = set(DEFAULTS) | set(REQUIRED) | set(L_KEYS)
     unknown = [k for k in p if k not in known]
     if unknown:  # 拼錯的欄位(例如 storeys)會被默默忽略, 建出不一樣的建築
-        raise ValueError(f"不認得的參數 {', '.join(unknown)}; 可用的有: {', '.join(sorted(known))}")
+        hints = [f"{k}(是不是 {near[0]}?)" if (near := difflib.get_close_matches(k, known, n=1, cutoff=0.6)) else k
+                 for k in unknown]
+        raise ValueError(f"不認得的參數 {', '.join(hints)}; 可用的有: {', '.join(sorted(known))}")
     if p["shape"] not in ("rect", "L"):
         raise ValueError(f"shape 只支援 rect 或 L, 收到 {p['shape']!r}")
     missing = [k for k in REQUIRED +(L_KEYS if p["shape"] == "L" else ()) if k not in p]
@@ -209,8 +227,7 @@ def validate(p):
     sets = [i.split("::") for i in CONSTRUCTION_SETS if i.count("::") == 2]
     for k, idx in (("construction_vintage", 0), ("construction", 2)):
         options = sorted({s[idx] for s in sets})
-        if str(p[k]) not in options:
-            raise ValueError(f"{k} 要是其中之一: {', '.join(options)}")
+        _choose(k, p[k], options)
     if str(p["climate_zone"]) not in {s[1].removeprefix("ClimateZone") for s in sets}:
         raise ValueError(f"climate_zone 要是 1–8, 收到 {p['climate_zone']!r}")
 
@@ -220,7 +237,8 @@ def main():
         raise SystemExit(__doc__)
     path = Path(sys.argv[1])
     try:
-        p = {**DEFAULTS, **json.loads(path.read_text(encoding="utf-8"))}
+        given = json.loads(path.read_text(encoding="utf-8"))
+        p = {**DEFAULTS, **given}
     except json.JSONDecodeError as e:
         raise SystemExit(f"參數錯誤: {path.name} 不是正確的 JSON(第 {e.lineno} 行第 {e.colno} 字: {e.msg})")
 
@@ -258,6 +276,23 @@ def main():
 
     print(f"已產生 {out}(OpenStudio {openstudio.openStudioVersion()} / E+ {openstudio.energyPlusVersion()},"
           f" {len(hb_model.rooms)} 個 zone, 樓地板 {floor:.0f} m²)")
+    print(describe(p, given, floor, len(hb_model.rooms)))
+
+
+def describe(p, given, floor, zones):
+    """用一段話說明建了什麼, 並列出沒填、用了預設值的參數, 讓使用者確認是不是他要的建築。"""
+    sys.path.insert(0, str(WS))
+    from building_report import BUILDING_NAMES, hvac_name
+    shape = f"{p['width']:g}×{p['depth']:g} m" + (f" 的 L 形(右上角挖掉 {p['notch_width']:g}×{p['notch_depth']:g} m)"
+                                                 if p["shape"] == "L" else " 的矩形")
+    lines = [f"建好的建築:{p['stories']} 層 {shape},樓高 {p['floor_height']:g} m,樓地板合計 {floor:,.0f} m²({zones} 個 zone);",
+             f"  用途 {BUILDING_NAMES.get(p['building_type'], p['building_type'])},窗牆比 {p['wwr']:.0%},"
+             f"空調 {hvac_name(p['hvac'])};",
+             f"  構造 {p['construction']}、{p['construction_vintage']} 年代、ASHRAE 氣候區 {p['climate_zone']};氣象檔固定 Chicago。"]
+    defaulted = [k for k in DEFAULTS if k not in given and k != "vintage"]
+    if defaulted:
+        lines.append("  以下沒填、用了預設值:" + "、".join(f"{k}={DEFAULTS[k]}" for k in defaulted))
+    return "\n".join(lines)
 
 
 if __name__ == "__main__":
