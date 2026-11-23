@@ -63,6 +63,9 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 .legend { display: flex; flex-wrap: wrap; gap: 14px; font-size: 13px; color: var(--ink-2); margin: 2px 0 6px; }
 .legend i { display: inline-block; width: 12px; height: 12px; border-radius: 3px; vertical-align: -1px; margin-right: 5px; }
 .legend i.line { height: 3px; border-radius: 2px; vertical-align: 3px; }
+.legend .unc { cursor: pointer; }
+.legend .unc input { margin: 0 2px 0 0; vertical-align: -2px; }
+.legend i.whisk { width: 2px; height: 12px; border-radius: 1px; background: var(--ink-2); margin: 0 5px 0 4px; }
 .chart { position: relative; }
 svg { display: block; width: 100%; overflow: visible; }
 svg text { fill: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
@@ -121,6 +124,7 @@ td .b { display: inline-block; height: 8px; background: var(--s-building); borde
       <span><i style="background:var(--s-building)"></i>建築(EnergyPlus)</span>
       <span><i style="background:var(--s-charging)"></i>車輛充電</span>
       <span><i class="line" style="background:var(--s-pv)"></i>光伏發電</span>
+      <label class="unc"><input type="checkbox" id="unc" checked> <i class="whisk"></i>建築 5–95% 區間</label>
     </div>
     <div class="chart" id="main-chart"><div class="tip" id="tip"></div></div>
     <div class="legend" style="margin-top:10px"><span><i class="line" style="background:var(--s-temp)"></i>室外乾球溫度 °C(ERA5)</span></div>
@@ -136,7 +140,7 @@ td .b { display: inline-block; height: 8px; background: var(--s-building); borde
 
   <section class="card" aria-labelledby="t-ecm">
     <h2 id="t-ecm">節能措施(9 次全年模擬)</h2>
-    <p class="hint">在校準模型上套用工具鏈的 8 種措施;7 月餘電小時為節能後光伏多於總負荷的小時數(基準 43 h)。</p>
+    <p class="hint">在校準模型上套用工具鏈的 8 種措施;7 月餘電小時為節能後光伏多於總負荷的小時數(基準 42 h)。</p>
     <table id="ecm"><thead><tr><th>措施</th><th>全年節電 MWh</th><th>占比</th><th>7 月餘電 h</th></tr></thead><tbody></tbody></table>
   </section>
 
@@ -145,8 +149,9 @@ td .b { display: inline-block; height: 8px; background: var(--s-building); borde
     <ul>
       <li>實測依據只有一條 24 點的年平均典型日;8,760 小時是<strong>校準後的模擬情景</strong>,不是電表數據。</li>
       <li>建築用電的日間差異來自 2025 年逐時氣象(空調);營業排程每天相同,未區分節假日。</li>
+      <li>建築的 5–95% 區間:14 個文獻參數(圍護、內部負荷、空調 COP、設定溫度)拉丁超立方抽 100 組,每組各自重新校準到典型日後的逐時分布。它只反映這些參數的不確定性,不含排程與氣象。</li>
       <li>光伏 = 典型日出力 × 當時水平總輻射 / 全年同鐘點平均;充電 = 典型日 × 浙江月度係數 × 實測日際波動。</li>
-      <li>假設與局限見<a href="https://github.com/Tanna-qne/building-energy-toolchain/blob/main/projects/changxing/MODEL_README.md">模型說明</a>第 9、11–13 節。</li>
+      <li>假設與局限見<a href="https://github.com/Tanna-qne/building-energy-toolchain/blob/main/projects/changxing/MODEL_README.md">模型說明</a>第 9、11–15 節。</li>
     </ul>
   </section>
 </main>
@@ -176,6 +181,7 @@ fetch("data.json").then((r) => r.json()).then((data) => {
   D.net = D.load.map((l, i) => l - D.pv[i]);
   const peak = D.load.indexOf(Math.max(...D.load));
   D.peakDay = Math.floor(peak / 24);
+  if (!D.unc) $(".legend .unc").remove();
   drawHeat(); drawEcm(); update();
   matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { drawHeat(); update(); });
   addEventListener("resize", () => { clearTimeout(window._rt); window._rt = setTimeout(() => { drawHeat(); update(); }, 150); });
@@ -188,6 +194,7 @@ $("#date").onchange = (e) => e.target.value && setDay(dayOf(e.target.value));
 for (const [id, n] of [["#v1", 1], ["#v7", 7]]) $(id).onclick = () => {
   span = n; $("#v1").setAttribute("aria-pressed", n === 1); $("#v7").setAttribute("aria-pressed", n === 7); setDay(day);
 };
+$("#unc").onchange = () => D && update();
 document.querySelectorAll(".quick button").forEach((b) => b.onclick = () => setDay(b.dataset.d === "peak" ? D.peakDay : dayOf(b.dataset.d)));
 
 function update() {
@@ -252,6 +259,24 @@ function drawMain(a, z) {
   el("polyline", { points: pts, fill: "none", stroke: css("--surface"), "stroke-width": 5, "stroke-linejoin": "round" }, f.svg);
   el("polyline", { points: pts, fill: "none", stroke: css("--s-pv"), "stroke-width": 2, "stroke-linejoin": "round" }, f.svg);
   if (n <= 24) D.pv.slice(a, z).forEach((v, i) => v > 0 && el("circle", { cx: f.x0 + (i + 0.5) * bw, cy: y(v), r: 4, fill: css("--s-pv"), stroke: css("--surface"), "stroke-width": 2 }, f.svg));
+  if (D.unc && $("#unc")?.checked) {
+    const ink = css("--ink-2"), ch = D.charging;
+    if (n <= 24) {
+      for (let i = 0; i < n; i++) {
+        const k = a + i, cx = f.x0 + (i + 0.5) * bw, lo = y(D.unc.p5[k] + ch[k]), hi = y(D.unc.p95[k] + ch[k]);
+        el("line", { x1: cx, x2: cx, y1: lo, y2: hi, stroke: css("--surface"), "stroke-width": 4 }, f.svg);
+        el("line", { x1: cx, x2: cx, y1: lo, y2: hi, stroke: ink, "stroke-width": 1.5 }, f.svg);
+        for (const yy of [lo, hi]) el("line", { x1: cx - 4, x2: cx + 4, y1: yy, y2: yy, stroke: ink, "stroke-width": 1.5 }, f.svg);
+      }
+    } else {
+      const top = [], bot = [];
+      for (let i = 0; i < n; i++) {
+        const k = a + i, cx = f.x0 + (i + 0.5) * bw;
+        top.push(`${cx},${y(D.unc.p95[k] + ch[k])}`); bot.unshift(`${cx},${y(D.unc.p5[k] + ch[k])}`);
+      }
+      el("polygon", { points: top.concat(bot).join(" "), fill: ink, "fill-opacity": 0.35 }, f.svg);
+    }
+  }
   hover(host, f, a, n, bw, y, true);
 }
 
@@ -284,7 +309,8 @@ function hover(host, f, a, n, bw, y) {
     cross.setAttribute("x1", cx); cross.setAttribute("x2", cx); cross.setAttribute("visibility", "visible");
     const h = k % 24, net = D.net[k];
     tip.innerHTML = `<b>${label(Math.floor(k / 24))} ${h}:00–${h + 1}:00</b>` +
-      row("--s-building", "建築", D.building[k]) + row("--s-charging", "充電", D.charging[k]) +
+      row("--s-building", "建築", D.building[k]) +
+      (D.unc ? `<div class="row"><span style="padding-left:13px">5–95%</span><span>${fmt(D.unc.p5[k], 1)}–${fmt(D.unc.p95[k], 1)}</span></div>` : "") + row("--s-charging", "充電", D.charging[k]) +
       row("--s-pv", "光伏", D.pv[k]) +
       `<div class="row" style="margin-top:4px;border-top:1px solid var(--border);padding-top:4px"><span>${net < 0 ? "餘電" : "淨購電"}</span><span>${fmt(Math.abs(net), 1)} kWh</span></div>` +
       `<div class="row"><span>氣溫</span><span>${fmt(D.temp[k], 1)} °C</span></div>`;

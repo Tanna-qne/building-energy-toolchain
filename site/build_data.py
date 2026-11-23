@@ -28,6 +28,9 @@ def main():
                for r in csv.DictReader(f) if r["key"] not in ("baseline", "lights_film")]
     r1 = lambda xs: [round(x, 1) for x in xs]  # noqa: E731
     data = {"year": 2025, "building": r1(building), "charging": r1(charging), "pv": r1(pv), "temp": r1(temp), "ecm": ecm}
+    bands = CX / "sensitivity" / "uncertainty_hourly_bands.csv"  # 建築逐時 5–95% 區間(各樣本重新校準後)
+    if bands.exists():
+        data["unc"] = {q: r1(column(bands, f"{q}_kWh", "utf-8")) for q in ("p5", "p95")}
     (HERE / "data.json").write_text(json.dumps(data, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
     print(f"site/data.json: 建築 {sum(building) / 1000:,.0f} MWh、充電 {sum(charging) / 1000:,.0f} MWh、"
           f"光伏 {sum(pv) / 1000:,.0f} MWh")

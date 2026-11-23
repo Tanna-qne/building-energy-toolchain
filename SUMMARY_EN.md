@@ -34,6 +34,12 @@ EnergyPlus-based building energy modelling, calibration and retrofit analysis. T
 - The out-of-sample CV(RMSE) is 48%, against 53% for a block-mean baseline with no physics.
 - The isolated meal-time peaks cannot be predicted from neighbouring hours. This is quantitative evidence that the hourly shape is operational input, and that using 24 hourly values is required by the data rather than overfitting.
 
+**Uncertainty bands** (100 Latin hypercube samples of the same 14 parameters, each recalibrated to the typical day; 277 annual runs)
+- Calibration narrows the 5–95% range of annual energy from ±6.9% to ±0.1%, and July energy from ±10.8% to ±4.2%.
+- It barely narrows the end uses: cooling stays at ±22% and heating at ±52% (31–90 MWh). Calibration constrains the total, not the split.
+- For PV and storage sizing the bands are narrow: July PV surplus ±5.4%, July net peak ±1.1%. Evening EV charging and PV dominate those figures, so storage sizing is insensitive to the building parameters.
+- The hourly 5–95% band is shown on the interactive results page.
+
 **Energy conservation measures** (9 annual runs on the calibrated model)
 
 | Measure | Annual saving | Note |
