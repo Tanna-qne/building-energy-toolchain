@@ -1,0 +1,205 @@
+{
+ "source": "GB 55015-2021(維基文庫轉錄本)",
+ "area_m2": 5048.005373502442,
+ "checks": [
+  {
+   "clause": "附錄 B.0.1",
+   "item": "公共建築分類",
+   "value": "單棟 5,048 m²",
+   "limit": "> 300 m² 為甲類",
+   "ok": true,
+   "note": "按甲類公共建築要求"
+  },
+  {
+   "clause": "表 3.1.10-4",
+   "item": "外牆",
+   "value": "K 0.51, D 3.88",
+   "limit": "K ≤ 0.8(D > 2.5)",
+   "ok": true,
+   "note": ""
+  },
+  {
+   "clause": "表 3.1.10-4",
+   "item": "屋面",
+   "value": "K 0.45",
+   "limit": "K ≤ 0.4",
+   "ok": false,
+   "note": "附錄 C.0.1-1: 屋面不得通過權衡判斷降低, 必須直接達標"
+  },
+  {
+   "clause": "表 3.1.10-4",
+   "item": "外窗 東向(方位 69°)",
+   "value": "窗牆比 0.12, K 2.2, SHGC 0.4",
+   "limit": "K ≤ 3.0, SHGC ≤ 0.45",
+   "ok": true,
+   "note": ""
+  },
+  {
+   "clause": "表 3.1.10-4",
+   "item": "外窗 南向(方位 159°)",
+   "value": "窗牆比 0.39, K 2.2, SHGC 0.4",
+   "limit": "K ≤ 2.2, SHGC ≤ 0.35",
+   "ok": false,
+   "note": ""
+  },
+  {
+   "clause": "表 3.1.10-4",
+   "item": "外窗 西向(方位 249°)",
+   "value": "窗牆比 0.17, K 2.2, SHGC 0.4",
+   "limit": "K ≤ 3.0, SHGC ≤ 0.45",
+   "ok": true,
+   "note": ""
+  },
+  {
+   "clause": "表 3.1.10-4",
+   "item": "外窗 北向(方位 339°)",
+   "value": "窗牆比 0.24, K 2.2, SHGC 0.4",
+   "limit": "K ≤ 2.6, SHGC ≤ 0.45",
+   "ok": true,
+   "note": ""
+  },
+  {
+   "clause": "3.1.15",
+   "item": "南、東、西向外窗遮陽",
+   "value": "模型中遮陽物件 0 個",
+   "limit": "應採取遮陽措施",
+   "ok": false,
+   "note": "原型論文未給遮陽構造, 模型未建; 實際建築是否有挑簷或遮陽需現場核實"
+  },
+  {
+   "clause": "3.3.7",
+   "item": "照明 dining",
+   "value": "10 W/m²",
+   "limit": "≤ 8 W/m²",
+   "ok": false,
+   "note": "表 3.3.7-5 中餐廳"
+  },
+  {
+   "clause": "3.3.7",
+   "item": "照明 kitchen",
+   "value": "10 W/m²",
+   "limit": "—",
+   "ok": null,
+   "note": "無對應條目(規範未列商業廚房)"
+  },
+  {
+   "clause": "3.3.7",
+   "item": "照明 lobby",
+   "value": "9 W/m²",
+   "limit": "≤ 8 W/m²",
+   "ok": false,
+   "note": "表 3.3.7-5 大堂"
+  },
+  {
+   "clause": "3.3.7",
+   "item": "照明 shop",
+   "value": "10 W/m²",
+   "limit": "≤ 9 W/m²",
+   "ok": false,
+   "note": "表 3.3.7-4 一般商店營業廳(超市為 10.0)"
+  },
+  {
+   "clause": "3.3.7",
+   "item": "照明 store",
+   "value": "5 W/m²",
+   "limit": "≤ 3.5 W/m²",
+   "ok": false,
+   "note": "表 3.3.7-12 一般件庫"
+  },
+  {
+   "clause": "3.3.7",
+   "item": "照明 toilet",
+   "value": "10 W/m²",
+   "limit": "≤ 3 W/m²",
+   "ok": false,
+   "note": "表 3.3.7-12 廁所(普通)"
+  },
+  {
+   "clause": "3.3.7",
+   "item": "照明 dorm",
+   "value": "7 W/m²",
+   "limit": "≤ 4.5 W/m²",
+   "ok": false,
+   "note": "表 3.3.7-7 學生宿舍(員工宿舍無專門條目)"
+  },
+  {
+   "clause": "3.3.7",
+   "item": "照明 office",
+   "value": "9 W/m²",
+   "limit": "≤ 8 W/m²",
+   "ok": false,
+   "note": "表 3.3.7-3 普通辦公室"
+  },
+  {
+   "clause": "3.2.14",
+   "item": "房間空調器能效",
+   "value": "額定製冷 COP 3.5、製熱 COP 3.3(變頻)",
+   "limit": "APF ≥ 3.30–4.00(依製冷量)",
+   "ok": null,
+   "note": "規範以 APF 判定; 模型只有額定點 COP, 無法直接比較, 見第 16 節說明"
+  },
+  {
+   "clause": "5.2.1",
+   "item": "新建建築應安裝太陽能系統",
+   "value": "站內光伏(第 11.1 節)",
+   "limit": "應安裝",
+   "ok": true,
+   "note": ""
+  }
+ ],
+ "reference_changes": [
+  {
+   "item": "屋面",
+   "construction": "CX Roof (tile)"
+  },
+  {
+   "item": "外窗 南",
+   "orientation": "南",
+   "azimuth": 159,
+   "construction": "CX Window",
+   "limit_shgc": 0.35
+  }
+ ],
+ "simulations": {
+  "design": {
+   "facility_MWh": 1481.715839266523,
+   "heating_MWh": 52.217523829512885,
+   "cooling_MWh": 200.94314921384452,
+   "fans_MWh": 83.58041629581552,
+   "appendix_c": {
+    "Q_C_MWh": 887.9271787842431,
+    "Q_H_MWh": 163.82659857442857,
+    "E_C_kWh_m2": 50.25618256753588,
+    "E_H_kWh_m2": 14.184040344831777,
+    "E_kWh_m2": 64.44022291236766
+   }
+  },
+  "reference": {
+   "facility_MWh": 1480.6185445512758,
+   "heating_MWh": 52.60528435146194,
+   "cooling_MWh": 199.520662029825,
+   "fans_MWh": 83.51784824263878,
+   "appendix_c": {
+    "Q_C_MWh": 882.1166249294266,
+    "Q_H_MWh": 165.15646192658113,
+    "E_C_kWh_m2": 49.92730846352885,
+    "E_H_kWh_m2": 14.299179373562055,
+    "E_kWh_m2": 64.2264878370909
+   }
+  },
+  "code_limits": {
+   "facility_MWh": 1438.911886369556,
+   "heating_MWh": 53.71354873758035,
+   "cooling_MWh": 197.27644253048086,
+   "fans_MWh": 83.4322721098309,
+   "appendix_c": {
+    "Q_C_MWh": 872.3453269070603,
+    "Q_H_MWh": 168.75305189711804,
+    "E_C_kWh_m2": 49.3742584510197,
+    "E_H_kWh_m2": 14.6105706719826,
+    "E_kWh_m2": 63.9848291230023
+   }
+  }
+ },
+ "tradeoff_pass": false
+}

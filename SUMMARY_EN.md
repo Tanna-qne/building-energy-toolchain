@@ -61,6 +61,12 @@ EnergyPlus-based building energy modelling, calibration and retrofit analysis. T
 - At the same rated COP, seasonal COP rises from 3.79 to 4.42 (cooling) and 2.83 to 3.26 (heating); heating energy falls from 67 to 52 MWh and fan energy from 109 to 84 MWh.
 - Both calibrated models match the typical day equally well and differ by 0.1% in annual energy. With only total-load data, HVAC efficiency is not identifiable: calibration moves energy between end uses. Separating them needs sub-metering or nameplate and operating records.
 
+**Check against GB 55015-2021** (China's mandatory building energy code; limits taken from a Wikisource transcription, not the official text)
+- As a 甲类 public building in the hot-summer/cold-winter zone, the walls and the north, east and west windows comply.
+- The roof (U 0.45 vs ≤0.40), south-window SHGC (0.40 vs ≤0.35), external shading, and lighting power density in 7 of 8 room types do not. The roof cannot be traded off under Appendix C.
+- The Appendix C trade-off fails narrowly (64.44 vs 64.23 kWh/m² heating and cooling). Bringing the envelope to the limits saves only 0.07% of annual electricity; bringing lighting to the limits saves another 2.8%.
+- The prototype was designed under earlier standards, so non-compliance with the 2022 code is expected. The comparison uses calibrated operating conditions rather than the code's standard conditions, so only the design-vs-reference difference is meaningful.
+
 **PV and EV charging series**
 - PV has two scenarios: one scales the measured typical day by hourly irradiance, the other uses NREL PVWatts v5 physics.
 - EV charging is the typical day × provincial monthly factors × measured day-to-day variability.
