@@ -180,13 +180,25 @@ def db_status() -> str:
         lines.append(f"- **找不到 DesignBuilder 執行檔**:{e}")
     lic = _licences()
     if lic:
-        soonest = min(d for _, d in lic)
-        left = (soonest - date.today()).days
-        mods = "、".join(sorted({MODULES.get(c, c) for c, _ in lic}))
-        when = "**已過期**" if left < 0 else "**今天到期**" if left == 0 else f"還有 {left} 天"
-        lines.append(f"- 授權到 {soonest:%Y-%m-%d}({when});模組:{mods}。")
-        if left <= 7:
-            lines.append("  授權到期後 DB 的模擬與計算都不能用,需要續約。")
+        # 同一模組可能有新舊幾份授權檔(續約後舊的還在), 每個模組取最晚的到期日
+        latest = {}
+        for code, d in lic:
+            latest[code] = max(d, latest.get(code, d))
+        today = date.today()
+        valid = {c: d for c, d in latest.items() if d >= today}
+        if valid:
+            soonest = min(valid.values())
+            left = (soonest - today).days
+            mods = "、".join(sorted(MODULES.get(c, c) for c in valid))
+            when = "**今天到期**" if left == 0 else f"還有 {left} 天"
+            lines.append(f"- 授權到 {soonest:%Y-%m-%d}({when});有效模組:{mods}。")
+            if left <= 7:
+                lines.append("  授權到期後 DB 的模擬與計算都不能用,需要續約。")
+        else:
+            lines.append(f"- 授權**已過期**(最晚到 {max(latest.values()):%Y-%m-%d}),DB 的模擬與計算都不能用。")
+        expired = sorted(MODULES.get(c, c) for c in latest if c not in valid)
+        if valid and expired:
+            lines.append(f"- 已過期的模組:{'、'.join(expired)}。")
     else:
         lines.append(f"- 讀不到授權檔({LICENCE_DIR})。")
     return "\n".join(lines)

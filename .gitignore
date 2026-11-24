@@ -59,3 +59,4 @@ toolchain.local.json
 建築能耗.bat
 .mcp.json
 db_models/app/
+db_models/dblibrary/
