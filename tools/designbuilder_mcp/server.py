@@ -101,14 +101,55 @@ def _working_copy(dsb_path: str) -> Path:
     return dst
 
 
+DIAG_DIR = Path(os.environ["LOCALAPPDATA"]) / "DesignBuilder" / "Diagnostics"
+STALL_S = 300  # DB 的診斷紀錄這麼久沒有新內容、又還沒做完, 視為停在對話框
+
+
+def _diag_log(dsb: Path, started: float):
+    """這次啟動的 DB 寫的診斷紀錄(DB 每次啟動開一個新檔, 開頭記下命令列)。"""
+    for f in sorted(DIAG_DIR.glob("Diagnostics_*.log"), key=lambda p: p.stat().st_mtime, reverse=True):
+        if f.stat().st_mtime < started - 5:
+            break
+        head = f.read_text(encoding="latin-1", errors="replace")[:20000]
+        if str(dsb).lower() in head.lower():
+            return f
+    return None
+
+
+def _diag_state(log: Path, last_cmd: str):
+    """(做完了沒, 紀錄最後幾行)。做完 = 處理過最後一個指令之後, DB 放開了模型檔("Removing 'In Use' file")。
+    匯出 XML、模擬、設計負載實測都是這個順序(2026-11-24)。"""
+    text = log.read_text(encoding="latin-1", errors="replace")
+    i = text.rfind(f"Processing batch command: {last_cmd}")
+    done = i >= 0 and "Removing 'In Use' file" in text[i:]
+    tail = [ln.strip() for ln in text.strip().splitlines()[-8:] if ln.strip()]
+    return done, tail
+
+
 def _run_chain(dsb: Path, chain: ProcessChain, timeout_s: int, finished=None):
-    """跑一串 /process= 指令。finished(): 結果檔出現就回傳 True(DB 不一定會自己關, 不能只等它結束)。
-    沒給 finished 時等 DB 結束。回傳秒數。"""
+    """跑一串 /process= 指令, 用 DB 自己的診斷紀錄判斷做完沒有; 做完就關掉 DB。
+    finished(): 另外的完成條件(例如結果檔出現), 任一成立就算完成。回傳 (秒數, DB 有沒有關掉)。
+    紀錄太久沒動時拋錯, 附上紀錄最後幾行, 通常是 DB 停在某個對話框。"""
     _check_idle()
     start = time.time()
     _launch(f'"{dsb}" {chain.to_string()}')
-    seen = False  # 提權後 DB 要一陣子才出現在行程列表; 看到它跑過, 「不在了」才代表它結束
+    last_cmd = chain.to_string().split("=", 1)[-1].split(",")[-1].strip()
+    log, last_size, last_change = None, -1, time.time()
+    seen = False
     while time.time() - start < timeout_s:
+        time.sleep(5)
+        log = log or _diag_log(dsb, start)
+        if log:
+            size = log.stat().st_size
+            if size != last_size:
+                last_size, last_change = size, time.time()
+            done, tail = _diag_state(log, last_cmd)
+            if done:
+                break
+            if time.time() - last_change > STALL_S and is_running():
+                _close_db()
+                raise RuntimeError("DesignBuilder 超過 {} 秒沒有進展,可能停在對話框。DB 紀錄最後幾行:\n    {}".format(
+                    STALL_S, "\n    ".join(tail)))
         if finished and finished():
             time.sleep(5)  # 讓 DB 把檔案寫完
             break
@@ -116,15 +157,16 @@ def _run_chain(dsb: Path, chain: ProcessChain, timeout_s: int, finished=None):
         seen = seen or running
         if seen and not running:
             break
-        time.sleep(5)
     else:
-        raise RuntimeError(f"DesignBuilder 超過 {timeout_s} 秒還沒做完(可能停在對話框); 請使用者看一下 DB 畫面")
+        _close_db()
+        raise RuntimeError(f"DesignBuilder 超過 {timeout_s} 秒還沒做完")
+    time.sleep(3)
     closed = _close_db()
     return round(time.time() - start), closed
 
 
-CLOSE_NOTE = ("DesignBuilder 做完後沒有自己關掉, 而且它以系統管理員身分執行, 這邊關不掉: "
-              "請使用者關閉 DB 視窗(不用存檔), 下一個 DB 工具才能執行。")
+CLOSE_NOTE = ("DesignBuilder 做完後沒有關掉, 這邊也關不掉(通常是 DB 被設成「以系統管理員身分執行」): "
+              "請使用者在工作管理員結束 DesignBuilder.exe, 下一個 DB 工具才能執行。")
 
 
 def _newer_than(path: Path, t: float):
