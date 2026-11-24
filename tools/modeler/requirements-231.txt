@@ -1,0 +1,6 @@
+dragonfly-energy==1.46.53
+honeybee-energy-standards==2.3.5
+honeybee-designbuilder==0.4.8
+# DesignBuilder 自帶的 EnergyPlus 23.1 要配 OpenStudio 3.6.1(Windows 版只支援 Python 3.10)。
+# honeybee-openstudio 綁定 openstudio==3.11, 所以另外用 --no-deps 裝(安裝程式會做):
+#   uv pip install --no-deps honeybee-openstudio==0.10.0 openstudio==3.6.1 openstudio-backporter==0.2.0

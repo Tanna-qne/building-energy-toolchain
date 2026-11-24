@@ -1,0 +1,487 @@
+diff --git a/energyplus-mcp-server/apply_windows_patches.py b/energyplus-mcp-server/apply_windows_patches.py
+new file mode 100644
+index 0000000..23035b9
+--- /dev/null
++++ b/energyplus-mcp-server/apply_windows_patches.py
+@@ -0,0 +1,54 @@
++"""重新套用 eppy 的 Windows 修正(stdin 卡死)。
++
++`uv sync` 會重建 .venv,把 site-packages 裡的 patch 蓋掉,跑一次這個就好:
++    .venv/Scripts/python.exe apply_windows_patches.py
++"""
++import re
++import subprocess
++import sys
++from pathlib import Path
++
++MARK = "stdin=subprocess.DEVNULL"
++
++
++def eppy_runner_path() -> Path:
++    out = subprocess.run([sys.executable, "-c", "import eppy, os; print(os.path.dirname(eppy.__file__))"],
++                         capture_output=True, text=True, check=True)
++    return Path(out.stdout.strip()) / "runner" / "run_functions.py"
++
++
++def calls(src):
++    """每個 check_call(...) 的 (開括號後, 對應的閉括號) 位置; 用括號配對, 引數裡有 open(...) 也不會切錯。"""
++    for m in re.finditer(r"\bcheck_call\(", src):
++        depth, i = 1, m.end()
++        while depth:
++            depth += {"(": 1, ")": -1}.get(src[i], 0)
++            i += 1
++        yield m.end(), i - 1
++
++
++def main() -> int:
++    path = eppy_runner_path()
++    src = path.read_text(encoding="utf-8")
++    spans = list(calls(src))
++    if not spans:
++        print(f"找不到 check_call, 請人工檢查: {path}")
++        return 1
++    todo = [(a, b) for a, b in spans if MARK not in src[a:b]]
++    if not todo:
++        print(f"已套用({len(spans)} 處): {path}")
++        return 0
++    for a, b in reversed(todo):
++        src = src[:b] + ", " + MARK + src[b:]
++    if not re.search(r"^import subprocess\b", src, re.MULTILINE):
++        # 放在第一個一般 import 前; 放檔頭會排到 from __future__ 前面而語法錯誤
++        m = re.search(r"^(?:import |from (?!__future__))", src, re.MULTILINE)
++        at = m.start() if m else 0
++        src = src[:at] + "import subprocess\n" + src[at:]
++    path.write_text(src, encoding="utf-8")
++    print(f"已修正 {len(todo)} / {len(spans)} 處: {path}")
++    return 0
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
+diff --git a/energyplus-mcp-server/energyplus_mcp_server/config.py b/energyplus-mcp-server/energyplus_mcp_server/config.py
+index f57459f..7ca40f5 100644
+--- a/energyplus-mcp-server/energyplus_mcp_server/config.py
++++ b/energyplus-mcp-server/energyplus_mcp_server/config.py
+@@ -41,15 +41,24 @@ class EnergyPlusConfig:
+ @dataclass
+ class PathConfig:
+     """Path configuration"""
+-    workspace_root: str = "/workspace/energyplus-mcp-server"
++    # Windows 本機: 預設指向這個 repo 目錄, 避免 Linux 容器路徑 (\workspace) 造成權限錯誤
++    _repo_dir: str = str(Path(__file__).resolve().parent.parent)
++    workspace_root: str = _repo_dir
+     sample_files_path: str = ""
+-    temp_dir: str = "/tmp"
+-    output_dir: str = "/workspace/energyplus-mcp-server/outputs"
++    # 放在 repo 內(和 outputs 同層): %TEMP% 底下在 sandbox / DSH 啟動的環境裡不一定能建資料夾
++    temp_dir: str = os.path.join(_repo_dir, "temp")
++    output_dir: str = os.path.join(_repo_dir, "outputs")
+     
+     def __post_init__(self):
+         """Set default paths after initialization"""
+         if not self.sample_files_path:
+             self.sample_files_path = os.path.join(self.workspace_root, "sample_files")
++        # 用到時才會 makedirs, 但 get_server_status 會檢查它存在與否; 先建好避免誤報。
++        # 建不了(權限)也不能讓 server 起不來
++        try:
++            os.makedirs(self.temp_dir, exist_ok=True)
++        except OSError:
++            pass
+ 
+ 
+ @dataclass
+@@ -175,9 +184,10 @@ class Config:
+             self.energyplus.idd_path = ep_idd_path
+             # Derive installation path from IDD path
+             self.energyplus.installation_path = os.path.dirname(ep_idd_path)
+-            # Set executable path
++            # Set executable path (Windows 需要 .exe)
++            exe_name = "energyplus.exe" if os.name == "nt" else "energyplus"
+             self.energyplus.executable_path = os.path.join(
+-                self.energyplus.installation_path, "energyplus"
++                self.energyplus.installation_path, exe_name
+             )
+             # Set weather data path
+             self.energyplus.weather_data_path = os.path.join(
+@@ -189,10 +199,18 @@ class Config:
+             )
+         else:
+             # Default paths
+-            default_installation = "/app/software/EnergyPlusV26-1-0"
++            if os.name == "nt":
++                default_installation = os.getenv(
++                    "EPLUS_HOME",
++                    r"C:/Users/kiri/AppData/Local/Programs/EnergyPlusV26-2-0/EnergyPlus-26.2.0-4bd7a1f26f-Windows-x86_64",
++                )
++            else:
++                default_installation = "/app/software/EnergyPlusV26-1-0"
+             self.energyplus.installation_path = default_installation
+             self.energyplus.idd_path = os.path.join(default_installation, "Energy+.idd")
+-            self.energyplus.executable_path = os.path.join(default_installation, "energyplus")
++            self.energyplus.executable_path = os.path.join(
++                default_installation, "energyplus.exe" if os.name == "nt" else "energyplus"
++            )
+             # Set weather data path
+             self.energyplus.weather_data_path = os.path.join(default_installation, "WeatherData")
+             # Set example files path
+@@ -200,10 +218,19 @@ class Config:
+         
+         # Set default weather file
+         self.energyplus.default_weather_file = os.path.join(
+-            self.energyplus.weather_data_path, 
++            self.energyplus.weather_data_path,
+             "USA_CA_San.Francisco.Intl.AP.724940_TMY3.epw"
+         )
+ 
++        # 版本號從 IDD 第一行讀(!IDD_Version 26.2.0), 預設值 26.1.0 不會跟著本機安裝變
++        try:
++            with open(self.energyplus.idd_path, encoding="latin-1") as f:
++                first = f.readline()
++            if first.startswith("!IDD_Version"):
++                self.energyplus.version = first.split()[1]
++        except OSError:
++            pass
++
+     def _setup_logging(self):
+         """Configure logging based on configuration"""
+         log_level = getattr(logging, self.server.log_level.upper(), logging.INFO)
+diff --git a/energyplus-mcp-server/energyplus_mcp_server/energyplus_tools.py b/energyplus-mcp-server/energyplus_mcp_server/energyplus_tools.py
+index f7fafc5..34862cf 100644
+--- a/energyplus-mcp-server/energyplus_mcp_server/energyplus_tools.py
++++ b/energyplus-mcp-server/energyplus_mcp_server/energyplus_tools.py
+@@ -2363,6 +2363,31 @@ class EnergyPlusManager:
+             raise RuntimeError(f"Error modifying simulation settings: {str(e)}")
+ 
+ 
++    def _retrofit(self, idf_path: str, output_path: Optional[str], suffix: str, fn, **kwargs) -> str:
++        """本機新增: 讀 IDF -> fn(idf, **kwargs) 改模型 -> 存檔, 回傳 JSON(沒改到任何東西時不存檔)。"""
++        resolved_path = self._resolve_idf_path(idf_path)
++        idf = IDF(resolved_path)
++        changes = fn(idf, **kwargs)
++        if output_path is None:
++            path_obj = Path(resolved_path)
++            output_path = str(path_obj.parent / f"{path_obj.stem}_{suffix}{path_obj.suffix}")
++        if changes:
++            idf.save(output_path)
++        return json.dumps({"success": True, "input_file": resolved_path,
++                           "output_file": output_path if changes else None,
++                           "modifications_made": changes, "total_modifications": len(changes)}, indent=2)
++
++    def upgrade_insulation(self, idf_path: str, wall_u: float = 0.25, roof_u: float = 0.18,
++                           output_path: Optional[str] = None) -> str:
++        from .utils.retrofit import upgrade_insulation
++        return self._retrofit(idf_path, output_path, "insulated", upgrade_insulation, wall_u=wall_u, roof_u=roof_u)
++
++    def upgrade_hvac_efficiency(self, idf_path: str, cop_factor: float = 1.25, heater_eff: float = 0.95,
++                                fan_eff: float = 0.7, output_path: Optional[str] = None) -> str:
++        from .utils.retrofit import upgrade_hvac_efficiency
++        return self._retrofit(idf_path, output_path, "hvac_eff", upgrade_hvac_efficiency,
++                              cop_factor=cop_factor, heater_eff=heater_eff, fan_eff=fan_eff)
++
+     def add_coating_outside(self, idf_path: str, location, solar_abs=0.4, thermal_abs=0.9, 
+                             output_path: Optional[str] = None) -> str:
+ 
+@@ -2389,7 +2414,8 @@ class EnergyPlusManager:
+                 path_obj = Path(resolved_path)
+                 output_path = str(path_obj.parent / f"{path_obj.stem}_modified{path_obj.suffix}")
+             
+-            all_surfs = idf.idfobjects['BuildingSurface:Detailed']
++            # 要複製: idfobjects[...] 是模型本身的物件清單, 直接 extend 會把別類物件塞進去, 存檔後名稱重複(Severe)
++            all_surfs = list(idf.idfobjects['BuildingSurface:Detailed'])
+             if location.casefold() == "wall":
+                 all_surfs.extend(idf.idfobjects['Wall:Detailed'])
+             elif location.casefold() == "roof":
+@@ -2405,7 +2431,7 @@ class EnergyPlusManager:
+             construction_names = set([x.Construction_Name for x in ext_surfs])
+             constructions = [x for x in idf.idfobjects["Construction"] if x.Name in construction_names]
+             ext_layer_names = set([x.Outside_Layer for x in constructions])
+-            materials = idf.idfobjects['Material']
++            materials = list(idf.idfobjects['Material'])
+             materials.extend(idf.idfobjects['Material:NoMass'])
+             ext_layers = [x for x in materials if x.Name in ext_layer_names]
+             logger.debug(f"Found {len(ext_layers)} exterior layers for {location} surfaces: {ext_surf_names}")
+diff --git a/energyplus-mcp-server/energyplus_mcp_server/server.py b/energyplus-mcp-server/energyplus_mcp_server/server.py
+index ce3a627..1a19791 100644
+--- a/energyplus-mcp-server/energyplus_mcp_server/server.py
++++ b/energyplus-mcp-server/energyplus_mcp_server/server.py
+@@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
+ 
+ # Initialize configuration and set up logging
+ config = get_config()
++STARTED_AT = datetime.now()  # get_server_status 原本回報呼叫當下的時間, 看不出 server 是不是舊程序
+ 
+ # Initialize FastMCP server.
+ #
+@@ -699,6 +700,75 @@ async def add_window_film_outside(
+         return f"Error adding window film for {idf_path}: {str(e)}"
+ 
+ 
++@mcp.tool()
++async def upgrade_insulation(
++    idf_path: str,
++    wall_u: float = 0.25,
++    roof_u: float = 0.18,
++    output_path: Optional[str] = None
++) -> str:
++    """
++    Add insulation to exterior wall / roof constructions whose U-value is worse than the target
++    (a no-mass insulation layer is inserted after the outside layer; a copy of the construction is
++    assigned to exterior surfaces only, so shared interior constructions are untouched).
++
++    Args:
++        idf_path: Path to the input IDF file
++        wall_u: Target exterior wall U-value in W/m2-K, including surface films (default: 0.25)
++        roof_u: Target roof U-value in W/m2-K, including surface films (default: 0.18)
++        output_path: Optional path for output file (if None, creates one with _insulated suffix).
++                     No file is written when nothing needs upgrading.
++
++    Returns:
++        JSON string with the constructions changed (old U, new U, added R)
++    """
++    try:
++        logger.info(f"Upgrading insulation: {idf_path}")
++        result = ep_manager.upgrade_insulation(idf_path=idf_path, wall_u=wall_u, roof_u=roof_u, output_path=output_path)
++        return f"Insulation upgrade results:\n{result}"
++    except FileNotFoundError as e:
++        return f"File not found: {str(e)}"
++    except Exception as e:
++        logger.error(f"Error upgrading insulation for {idf_path}: {str(e)}")
++        return f"Error upgrading insulation for {idf_path}: {str(e)}"
++
++
++@mcp.tool()
++async def upgrade_hvac_efficiency(
++    idf_path: str,
++    cop_factor: float = 1.25,
++    heater_eff: float = 0.95,
++    fan_eff: float = 0.7,
++    output_path: Optional[str] = None
++) -> str:
++    """
++    Raise HVAC equipment efficiency: chiller and DX cooling COP are multiplied by cop_factor;
++    boiler / fuel heating coil efficiency and fan total efficiency are raised to at least the given values.
++    Autosized or blank fields are left alone. Ideal-load models have no equipment and are not changed.
++
++    Args:
++        idf_path: Path to the input IDF file
++        cop_factor: Multiplier for cooling COP (default: 1.25)
++        heater_eff: Minimum boiler / burner efficiency (default: 0.95)
++        fan_eff: Minimum fan total efficiency (default: 0.7)
++        output_path: Optional path for output file (if None, creates one with _hvac_eff suffix).
++                     No file is written when nothing changes.
++
++    Returns:
++        JSON string with the fields changed (old, new)
++    """
++    try:
++        logger.info(f"Upgrading HVAC efficiency: {idf_path}")
++        result = ep_manager.upgrade_hvac_efficiency(idf_path=idf_path, cop_factor=cop_factor, heater_eff=heater_eff,
++                                                    fan_eff=fan_eff, output_path=output_path)
++        return f"HVAC efficiency upgrade results:\n{result}"
++    except FileNotFoundError as e:
++        return f"File not found: {str(e)}"
++    except Exception as e:
++        logger.error(f"Error upgrading HVAC efficiency for {idf_path}: {str(e)}")
++        return f"Error upgrading HVAC efficiency for {idf_path}: {str(e)}"
++
++
+ @mcp.tool()
+ async def add_coating_outside(
+     idf_path: str,
+@@ -1084,7 +1154,7 @@ async def get_server_status() -> str:
+                 "name": config.server.name,
+                 "version": config.server.version,
+                 "status": "running",
+-                "startup_time": datetime.now().isoformat(),
++                "startup_time": STARTED_AT.isoformat(),
+                 "debug_mode": config.debug_mode
+             },
+             "system": {
+diff --git a/energyplus-mcp-server/energyplus_mcp_server/utils/electric_equipment_utils.py b/energyplus-mcp-server/energyplus_mcp_server/utils/electric_equipment_utils.py
+index cc3be19..ce0db1e 100644
+--- a/energyplus-mcp-server/energyplus_mcp_server/utils/electric_equipment_utils.py
++++ b/energyplus-mcp-server/energyplus_mcp_server/utils/electric_equipment_utils.py
+@@ -17,6 +17,11 @@ from eppy.modeleditor import IDF
+ logger = logging.getLogger(__name__)
+ 
+ 
++
++def _per_area_field(obj):
++    """Watts per floor area: E+ 23.1 (DesignBuilder's engine) names it Watts_per_Zone_Floor_Area."""
++    return "Watts_per_Floor_Area" if "Watts_per_Floor_Area" in obj.fieldnames else "Watts_per_Zone_Floor_Area"
++
+ class ElectricEquipmentManager:
+     """Manager for EnergyPlus ElectricEquipment objects"""
+     
+@@ -80,7 +85,7 @@ class ElectricEquipmentManager:
+                     "schedule_name": getattr(equipment_obj, 'Schedule_Name', 'Unknown'),
+                     "design_level_calculation_method": getattr(equipment_obj, 'Design_Level_Calculation_Method', 'Unknown'),
+                     "design_level": getattr(equipment_obj, 'Design_Level', ''),
+-                    "watts_per_floor_area": getattr(equipment_obj, 'Watts_per_Floor_Area', ''),
++                    "watts_per_floor_area": getattr(equipment_obj, _per_area_field(equipment_obj), ''),
+                     "watts_per_person": getattr(equipment_obj, 'Watts_per_Person', ''),
+                     "fraction_latent": getattr(equipment_obj, 'Fraction_Latent', ''),
+                     "fraction_radiant": getattr(equipment_obj, 'Fraction_Radiant', ''),
+@@ -307,7 +312,8 @@ class ElectricEquipmentManager:
+                         continue
+                 
+                 old_value = getattr(equipment_obj, field_name, "")
+-                setattr(equipment_obj, field_name, new_value)
++                setattr(equipment_obj,
++                        _per_area_field(equipment_obj) if field_name == "Watts_per_Floor_Area" else field_name, new_value)
+                 
+                 result["modifications_applied"].append({
+                     "object_name": equipment_name,
+diff --git a/energyplus-mcp-server/energyplus_mcp_server/utils/lights_utils.py b/energyplus-mcp-server/energyplus_mcp_server/utils/lights_utils.py
+index 61ba1ce..8a614ae 100644
+--- a/energyplus-mcp-server/energyplus_mcp_server/utils/lights_utils.py
++++ b/energyplus-mcp-server/energyplus_mcp_server/utils/lights_utils.py
+@@ -17,6 +17,11 @@ from eppy.modeleditor import IDF
+ logger = logging.getLogger(__name__)
+ 
+ 
++
++def _per_area_field(obj):
++    """Watts per floor area: E+ 23.1 (DesignBuilder's engine) names it Watts_per_Zone_Floor_Area."""
++    return "Watts_per_Floor_Area" if "Watts_per_Floor_Area" in obj.fieldnames else "Watts_per_Zone_Floor_Area"
++
+ class LightsManager:
+     """Manager for EnergyPlus Lights objects"""
+     
+@@ -80,7 +85,7 @@ class LightsManager:
+                     "schedule_name": getattr(lights_obj, 'Schedule_Name', 'Unknown'),
+                     "design_level_calculation_method": getattr(lights_obj, 'Design_Level_Calculation_Method', 'Unknown'),
+                     "lighting_level": getattr(lights_obj, 'Lighting_Level', ''),
+-                    "watts_per_floor_area": getattr(lights_obj, 'Watts_per_Floor_Area', ''),
++                    "watts_per_floor_area": getattr(lights_obj, _per_area_field(lights_obj), ''),
+                     "watts_per_person": getattr(lights_obj, 'Watts_per_Person', ''),
+                     "return_air_fraction": getattr(lights_obj, 'Return_Air_Fraction', ''),
+                     "fraction_radiant": getattr(lights_obj, 'Fraction_Radiant', ''),
+@@ -333,7 +338,8 @@ class LightsManager:
+                         continue
+                 
+                 old_value = getattr(lights_obj, field_name, "")
+-                setattr(lights_obj, field_name, new_value)
++                setattr(lights_obj, _per_area_field(lights_obj) if field_name == "Watts_per_Floor_Area" else field_name,
++                        new_value)
+                 
+                 result["modifications_applied"].append({
+                     "object_name": lights_name,
+diff --git a/energyplus-mcp-server/energyplus_mcp_server/utils/retrofit.py b/energyplus-mcp-server/energyplus_mcp_server/utils/retrofit.py
+new file mode 100644
+index 0000000..51855e2
+--- /dev/null
++++ b/energyplus-mcp-server/energyplus_mcp_server/utils/retrofit.py
+@@ -0,0 +1,112 @@
++"""兩個改造措施的 IDF 修改(本機新增, 不是上游): 加強外牆 / 屋頂隔熱、提高空調設備效率。
++
++做法參考 NREL BCL 的 "Increase R-value of Insulation" 與 "Set COP for DX Cooling Units" 措施:
++- 隔熱: 外牆 / 屋頂的構造算出 U 值, 比目標差就加一層無質量保溫補到目標;
++  複製一份新構造只給外部表面用, 共用同構造的室內隔間不受影響。
++- 空調: 冰水主機 / DX 冷氣 COP 乘上倍數, 鍋爐與瓦斯加熱器效率、風扇總效率拉到下限。
++"""
++
++# 表面熱阻(室內 + 室外膜), ASHRAE 冬季條件; 用來從材料層算 U 值
++FILM_R = {"wall": 0.13 + 0.04, "roof": 0.10 + 0.04}
++
++
++def _layers(construction):
++    """Construction 的材料層名稱(Outside_Layer, Layer_2 …)。"""
++    names = [construction.Outside_Layer]
++    for i in range(2, 11):
++        v = getattr(construction, f"Layer_{i}", "")
++        if v:
++            names.append(v)
++    return [n for n in names if n]
++
++
++def _material_r(idf, name):
++    """一層材料的熱阻 m²K/W;讀不到(例如玻璃類)回傳 None。"""
++    for obj in idf.idfobjects["MATERIAL"]:
++        if obj.Name.upper() == name.upper():
++            return float(obj.Thickness) / float(obj.Conductivity)
++    for kind in ("MATERIAL:NOMASS", "MATERIAL:AIRGAP"):
++        for obj in idf.idfobjects[kind]:
++            if obj.Name.upper() == name.upper():
++                return float(obj.Thermal_Resistance)
++    return None
++
++
++def upgrade_insulation(idf, wall_u=0.25, roof_u=0.18):
++    """外牆 U 比 wall_u 差、屋頂比 roof_u 差的構造, 加一層保溫補到目標。回傳修改清單。"""
++    targets = {"wall": wall_u, "roof": roof_u}
++    surfaces = [s for s in idf.idfobjects["BUILDINGSURFACE:DETAILED"]
++                if s.Outside_Boundary_Condition.lower() == "outdoors" and s.Surface_Type.lower() in targets]
++    constructions = {c.Name.upper(): c for c in idf.idfobjects["CONSTRUCTION"]}
++    changes, new_names = [], {}
++    for s in surfaces:
++        kind = s.Surface_Type.lower()
++        key = (s.Construction_Name.upper(), kind)
++        if key not in new_names:
++            new_names[key] = None
++            c = constructions.get(key[0])
++            if c is None:
++                continue
++            rs = [_material_r(idf, n) for n in _layers(c)]
++            if any(r is None for r in rs):
++                continue  # 有讀不到熱阻的層(非一般材料), 不動
++            r_total = sum(rs) + FILM_R[kind]
++            u_old = 1 / r_total
++            if u_old <= targets[kind]:
++                continue
++            add_r = 1 / targets[kind] - r_total
++            mat = idf.newidfobject("MATERIAL:NOMASS", Name=f"Added insulation {kind} {c.Name}"[:100],
++                                   Roughness="MediumRough", Thermal_Resistance=round(add_r, 3),
++                                   Thermal_Absorptance=0.9, Solar_Absorptance=0.7, Visible_Absorptance=0.7)
++            layers = _layers(c)
++            # 放在最外層之後(外保溫的位置), 外層材料的日射吸收率等表面性質不變
++            new_layers = layers[:1] + [mat.Name] + layers[1:]
++            if len(new_layers) > 10:
++                continue
++            nc = idf.newidfobject("CONSTRUCTION", Name=f"{c.Name} insulated"[:100], Outside_Layer=new_layers[0])
++            for i, n in enumerate(new_layers[1:], start=2):
++                setattr(nc, f"Layer_{i}", n)
++            new_names[key] = nc.Name
++            changes.append({"construction": c.Name, "type": kind, "u_old": round(u_old, 3),
++                            "u_new": targets[kind], "added_r": round(add_r, 3)})
++        if new_names[key]:
++            s.Construction_Name = new_names[key]
++    return changes
++
++
++# (物件類別, 欄位, 方式) 方式: ("mul", 倍數) 或 ("min", 下限)
++HVAC_FIELDS = [
++    ("CHILLER:ELECTRIC:EIR", "Reference_COP", "cop"),
++    ("CHILLER:ELECTRIC:REFORMULATEDEIR", "Reference_COP", "cop"),
++    ("CHILLER:ELECTRIC", "Nominal_COP", "cop"),
++    ("CHILLER:CONSTANTCOP", "Nominal_COP", "cop"),
++    ("COILPERFORMANCE:DX:COOLING", "Gross_Rated_Cooling_COP", "cop"),
++    ("COIL:COOLING:DX:SINGLESPEED", "Gross_Rated_Cooling_COP", "cop"),
++    ("COIL:COOLING:DX:TWOSPEED", "High_Speed_Gross_Rated_Cooling_COP", "cop"),
++    ("COIL:COOLING:DX:TWOSPEED", "Low_Speed_Gross_Rated_Cooling_COP", "cop"),
++    ("HVACTEMPLATE:PLANT:CHILLER", "Nominal_COP", "cop"),
++    ("BOILER:HOTWATER", "Nominal_Thermal_Efficiency", "heat"),
++    ("COIL:HEATING:FUEL", "Burner_Efficiency", "heat"),
++    ("HVACTEMPLATE:PLANT:BOILER", "Efficiency", "heat"),
++    ("FAN:VARIABLEVOLUME", "Fan_Total_Efficiency", "fan"),
++    ("FAN:CONSTANTVOLUME", "Fan_Total_Efficiency", "fan"),
++    ("FAN:ONOFF", "Fan_Total_Efficiency", "fan"),
++]
++
++
++def upgrade_hvac_efficiency(idf, cop_factor=1.25, heater_eff=0.95, fan_eff=0.7):
++    """冷氣 / 冰水主機 COP ×cop_factor, 鍋爐與瓦斯加熱器效率、風扇效率拉到下限。回傳修改清單。"""
++    changes = []
++    for kind, field, how in HVAC_FIELDS:
++        if kind not in idf.idfobjects:
++            continue
++        for obj in idf.idfobjects[kind]:
++            try:
++                old = float(getattr(obj, field))
++            except (ValueError, TypeError, AttributeError):
++                continue  # 空白或 autosize
++            new = round(old * cop_factor, 3) if how == "cop" else max(old, heater_eff if how == "heat" else fan_eff)
++            if new != old:
++                setattr(obj, field, new)
++                changes.append({"object": kind, "name": obj.Name, "field": field, "old": old, "new": new})
++    return changes

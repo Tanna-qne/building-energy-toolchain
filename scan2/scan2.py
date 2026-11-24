@@ -167,7 +167,8 @@ def run(client, idf: Path):
             # 用假設的設備效率換成電與天然氣, 否則空調能耗整個漏掉
             cool = meter_kwh(od, "DistrictCooling:Facility") or 0.0
             heat = (meter_kwh(od, "DistrictHeatingWater:Facility") or 0.0) + \
-                (meter_kwh(od, "DistrictHeatingSteam:Facility") or 0.0)
+                (meter_kwh(od, "DistrictHeatingSteam:Facility") or 0.0) + \
+                (meter_kwh(od, "DistrictHeating:Facility") or 0.0)  # 23.1 的名稱
             if cool or heat:
                 elec = round(elec + cool / IDEAL_COOL_COP, 1)
                 gas = round(gas + heat / IDEAL_HEAT_EFF, 1)

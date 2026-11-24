@@ -43,7 +43,9 @@ DB_EP_DIR = Path(os.environ["LOCALAPPDATA"]) / "DesignBuilder" / "EnergyPlus"
 # 跑節能報告(from_db.py)的 Python: 預設是 DSH 內建 runtime, 可用環境變數 REPORT_PYTHON 指定
 MAIN_PY = Path(os.environ.get("REPORT_PYTHON") or
                Path.home() / ".dsh/dsh-runtimes/dsh-primary-runtime/dependencies/python/python.exe")
-MODELER_PY = WS / "tools" / "modeler" / ".venv" / "Scripts" / "python.exe"
+# 參數 → dsbXML 用建模環境: 官方 26.2 配的 .venv, 或只用 DesignBuilder 引擎時的 .venv231(安裝.bat 建的)
+MODELER_PY = next((p for p in (WS / "tools" / "modeler" / v / "Scripts" / "python.exe" for v in (".venv", ".venv231"))
+                   if p.exists()), WS / "tools" / "modeler" / ".venv" / "Scripts" / "python.exe")
 EP_OUTPUTS = ("in.idf", "eplusout.err", "eplustbl.htm", "eplusout.eso")
 
 # 常看的建築層屬性(ChangeAttributeValue 用同一組名稱)

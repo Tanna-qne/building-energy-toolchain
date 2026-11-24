@@ -14,9 +14,12 @@ import sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-MODELER_PY = HERE / "tools/modeler/.venv/Scripts/python.exe"
 sys.path.insert(0, str(HERE))
 import db_import  # noqa: E402
+
+# 建模環境要和引擎版本一致: 官方 26.2 用 OpenStudio 3.11(.venv),
+# DesignBuilder 自帶的 23.1 用 OpenStudio 3.6.1(.venv231, 見 tools/modeler/requirements-231.txt)
+MODELER_PY = HERE / "tools/modeler" / (".venv231" if db_import.TARGET < (24, 0) else ".venv") / "Scripts/python.exe"
 
 for stream in (sys.stdout, sys.stderr):
     if hasattr(stream, "reconfigure"):

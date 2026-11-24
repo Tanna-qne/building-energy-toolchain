@@ -1,7 +1,8 @@
-"""找 EnergyPlus 26.2 的安裝目錄。所有腳本共用, 換電腦不必改程式。
+"""找 EnergyPlus 的目錄。所有腳本共用, 換電腦不必改程式。
 
-順序: 環境變數 ENERGYPLUS_DIR → PATH 上的 energyplus → 各平台的預設安裝位置。
-都找不到就報錯, 告訴使用者設 ENERGYPLUS_DIR。
+順序: 環境變數 ENERGYPLUS_DIR → PATH 上的 energyplus → 各平台 26.2 的預設安裝位置
+→ tools/dbengine/engine(由 DesignBuilder 自帶引擎整理出來的 23.1, 見 tools/dbengine/setup_engine.py)。
+都找不到就報錯, 告訴使用者設 ENERGYPLUS_DIR。長興項目的模型是 26.2 版, 要用官方 26.2。
 """
 import os
 import shutil
@@ -31,6 +32,7 @@ def _candidates():
         yield Path(f"/Applications/EnergyPlus-{VERSION}")
     else:
         yield Path(f"/usr/local/EnergyPlus-{VERSION}")
+    yield Path(__file__).resolve().parent / "tools" / "dbengine" / "engine"
 
 
 def energyplus_dir() -> Path:
@@ -40,7 +42,7 @@ def energyplus_dir() -> Path:
             return d
         tried.append(str(d))
     raise FileNotFoundError(
-        "找不到 EnergyPlus 26.2。請把環境變數 ENERGYPLUS_DIR 設為安裝目錄(內含 "
+        "找不到 EnergyPlus。請把環境變數 ENERGYPLUS_DIR 設為安裝目錄(內含 "
         f"{EXE_NAME} 與 Energy+.idd)。已找過: " + "; ".join(tried))
 
 

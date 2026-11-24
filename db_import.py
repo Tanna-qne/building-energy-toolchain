@@ -27,7 +27,15 @@ INBOX = ROOT / "inbox"
 WORK = ROOT / "work"
 OUT = ROOT / "out"
 UPDATER = EP / "PreProcess" / "IDFVersionUpdater"
-TARGET = (26, 2)
+
+
+def engine_version():
+    """本機引擎的版本(讀 Energy+.idd 第一行): 官方 26.2, 或 DesignBuilder 自帶的 23.1(tools/dbengine)。"""
+    m = re.search(r"IDD_Version\s+(\d+)\.(\d+)", (EP / "Energy+.idd").read_text(encoding="latin-1")[:200])
+    return (int(m.group(1)), int(m.group(2))) if m else (26, 2)
+
+
+TARGET = engine_version()
 
 
 def idf_version(path: Path):
@@ -50,12 +58,13 @@ def transitions():
 
 
 def upgrade(path: Path):
-    """原地把 IDF 一路升到 26.2。Transition 要在自己的目錄執行才找得到各版 IDD。"""
+    """原地把 IDF 一路升到本機引擎的版本。Transition 要在自己的目錄執行才找得到各版 IDD。"""
     steps = transitions()
     ver = idf_version(path)
     while ver < TARGET:
         if ver not in steps:
-            raise RuntimeError(f"{path.name}: 沒有 {ver[0]}.{ver[1]} 的升級程式")
+            raise RuntimeError(f"{path.name}: 模型是 {ver[0]}.{ver[1]} 版, 本機引擎是 {TARGET[0]}.{TARGET[1]} 版,"
+                               f"沒有升級程式(DesignBuilder 自帶的引擎不附升級程式; 請從 DB 重新匯出)")
         nxt, exe = steps[ver]
         r = subprocess.run([str(exe), str(path.resolve())], cwd=UPDATER, stdin=subprocess.DEVNULL,
                            capture_output=True, text=True, errors="replace")
@@ -66,7 +75,7 @@ def upgrade(path: Path):
     for suffix in (".idfold", ".idfnew"):
         path.with_suffix(suffix).unlink(missing_ok=True)
     if ver > TARGET:
-        raise RuntimeError(f"{path.name}: 版本 {ver[0]}.{ver[1]} 比本機 E+ 26.2 新")
+        raise RuntimeError(f"{path.name}: 模型是 {ver[0]}.{ver[1]} 版, 比本機引擎 {TARGET[0]}.{TARGET[1]} 新")
 
 
 def safe_name(stem: str) -> str:
@@ -96,7 +105,8 @@ def prepare(client, src: Path, name: str):
                  {"idf_path": str(work.resolve()), "validation_level": "lenient",
                   # District 兩項給理想負載的模型用(DesignBuilder 預設的簡化空調), scan2.run() 會換算成電與氣
                   "meters": [["Electricity:Facility", "RunPeriod"], ["NaturalGas:Facility", "RunPeriod"],
-                             ["DistrictCooling:Facility", "RunPeriod"], ["DistrictHeatingWater:Facility", "RunPeriod"]]},
+                             ["DistrictCooling:Facility", "RunPeriod"], ["DistrictHeatingWater:Facility", "RunPeriod"],
+                             ["DistrictHeating:Facility", "RunPeriod"]]},  # 後者是 23.1 的名稱; 不存在的電表只會警告
                  WORK / f"{name}__ready.idf")
     return step or work
 

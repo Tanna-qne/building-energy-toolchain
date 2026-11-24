@@ -52,3 +52,10 @@ projects/changxing/hvac_vs/_trial/
 projects/changxing/hvac_vs/_runs/
 projects/changxing/hvac_vs/cx_vs_*.idf
 projects/changxing/gb55015/_runs/
+tools/dbengine/engine/
+db_models/enginetest/
+tools/modeler/.venv231/
+toolchain.local.json
+建築能耗.bat
+.mcp.json
+db_models/app/

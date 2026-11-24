@@ -34,6 +34,13 @@ from honeybee_energy.simulation.parameter import SimulationParameter  # noqa: E4
 from honeybee_openstudio.simulation import simulation_parameter_to_openstudio, assign_epw_to_model  # noqa: E402
 from honeybee_openstudio.writer import model_to_openstudio  # noqa: E402
 
+if tuple(int(x) for x in openstudio.openStudioVersion().split(".")[:2]) < (3, 7):
+    # OpenStudio 3.6(配 DesignBuilder 的 EnergyPlus 23.1)的 getXxx(handle) 只收字串, honeybee-openstudio 傳的是 UUID
+    for _name in ("getZoneHVACPackagedTerminalAirConditioner", "getZoneHVACPackagedTerminalHeatPump"):
+        _orig = getattr(openstudio.model.Model, _name)
+        setattr(openstudio.model.Model, _name,
+                lambda self, h, _f=_orig: _f(self, h if isinstance(h, str) else str(h)))
+
 for stream in (sys.stdout, sys.stderr):
     if hasattr(stream, "reconfigure"):
         stream.reconfigure(encoding="utf-8", errors="replace")
@@ -41,7 +48,8 @@ for stream in (sys.stdout, sys.stderr):
 sys.path.insert(0, str(WS))
 from eplus_paths import energyplus_dir  # noqa: E402
 EP = energyplus_dir()
-EPW = EP / "WeatherData" / "USA_IL_Chicago-OHare.Intl.AP.725300_TMY3.epw"  # 同 batch_driver.WEATHER
+# 同 batch_driver.WEATHER: 預設 Chicago, 環境變數 EPW 可換; 設計日也跟著這個氣象檔
+EPW = Path(os.environ.get("EPW") or EP / "WeatherData" / "USA_IL_Chicago-OHare.Intl.AP.725300_TMY3.epw")
 BUILT = WS / "db_models" / "built"
 HVAC_TYPES = {t: cls for cls in (VAV, PSZ, PTAC) for t in cls.EQUIPMENT_TYPES}
 
@@ -188,9 +196,18 @@ def build(p, cs=None, hvac_upgrade=False):
     hb_model = Model(p["name"], [bldg], units="Meters", tolerance=0.01, angle_tolerance=1.0) \
         .to_honeybee("Building", use_multiplier=True, tolerance=0.01)[0]
 
-    # 自動定尺寸需要設計日; 取氣象檔旁 .ddy 的 99.6% 暖房 / 0.4% 冷房
+    # 自動定尺寸需要設計日(99.6% 暖房 / 0.4% 冷房): 有氣象檔旁的 .ddy 就用;
+    # 沒有(例如 DesignBuilder 的氣象庫)就從 EPW 檔頭的 ASHRAE 設計條件推算
     sim_par = SimulationParameter()
-    sim_par.sizing_parameter.add_from_ddy_996_004(str(EPW.with_suffix(".ddy")))
+    if EPW.with_suffix(".ddy").exists():
+        sim_par.sizing_parameter.add_from_ddy_996_004(str(EPW.with_suffix(".ddy")))
+    else:
+        from ladybug.epw import EPW as LadybugEPW
+        epw = LadybugEPW(str(EPW))
+        sim_par.sizing_parameter.add_design_day(epw.annual_heating_design_day_996 or
+                                                epw.approximate_design_day("WinterDesignDay", percentile=0.4))
+        sim_par.sizing_parameter.add_design_day(epw.annual_cooling_design_day_004 or
+                                                epw.approximate_design_day("SummerDesignDay", percentile=0.4))
     os_model = simulation_parameter_to_openstudio(sim_par)
     assign_epw_to_model(str(EPW), os_model)
     os_model = model_to_openstudio(hb_model, seed_model=os_model)
@@ -288,7 +305,7 @@ def describe(p, given, floor, zones):
     lines = [f"建好的建築:{p['stories']} 層 {shape},樓高 {p['floor_height']:g} m,樓地板合計 {floor:,.0f} m²({zones} 個 zone);",
              f"  用途 {BUILDING_NAMES.get(p['building_type'], p['building_type'])},窗牆比 {p['wwr']:.0%},"
              f"空調 {hvac_name(p['hvac'])};",
-             f"  構造 {p['construction']}、{p['construction_vintage']} 年代、ASHRAE 氣候區 {p['climate_zone']};氣象檔固定 Chicago。"]
+             f"  構造 {p['construction']}、{p['construction_vintage']} 年代、ASHRAE 氣候區 {p['climate_zone']};氣象檔 {EPW.stem}。"]
     defaulted = [k for k in DEFAULTS if k not in given and k != "vintage"]
     if defaulted:
         lines.append("  以下沒填、用了預設值:" + "、".join(f"{k}={DEFAULTS[k]}" for k in defaulted))

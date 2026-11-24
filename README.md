@@ -59,6 +59,28 @@
 
 ## 使用方式
 
+## 最簡單:裝好就用(只需要 DesignBuilder)
+
+在裝了 DesignBuilder 的 Windows 電腦上:
+
+1. 先裝 [uv](https://docs.astral.sh/uv/getting-started/installation/) 和 Git。
+2. 雙擊根目錄的 **安裝.bat**。它會:
+   - 用 **DesignBuilder 自帶的 EnergyPlus**(23.1)整理出 `tools/dbengine/engine/`,不另外下載 EnergyPlus。
+     DB 只附引擎的 DLL,所以安裝程式用 Windows 內建的 C# 編譯器產生一個標準的 `energyplus.exe` 外殼
+     ([energyplus_shim.cs](tools/dbengine/energyplus_shim.cs)),也代替 DB 沒附的 ReadVarsESO 輸出 CSV。
+   - 建好建模環境(OpenStudio 3.6.1,對應 EnergyPlus 23.1)、EnergyPlus-MCP(固定版本 + [本機修正](tools/energyplus_mcp/energyplus-mcp.patch))、DesignBuilder MCP。
+   - 詢問要不要把兩個 MCP server 加到 Claude Desktop、Claude Code、DeepSeek Harness(會先備份原設定)。
+   - 最後自我檢查,並產生 **建築能耗.bat**。
+3. 雙擊 **建築能耗.bat**:選 .dsb / .idf 模型,或填寬、深、層數、用途、空調,選氣象檔,按「開始計算」。
+   算完會自動打開報告。也可以把模型檔拖到 建築能耗.bat 上。
+
+說明:
+- 用 DesignBuilder 的引擎跑 DB 匯出的模型,結果和官方 EnergyPlus 26.2 幾乎相同
+  (範例模型全年用電 39,792 kWh 兩者一致,8 種措施的省能 % 相同)。
+- 引擎是 23.1 版,沒有附升級程式:比 23.1 舊的 IDF 要從 DB 重新匯出;長興項目的模型是 26.2 版,仍用官方 EnergyPlus。
+- 「選 .dsb」會啟動 DesignBuilder 跑模擬,需要 DB 授權;「選 .idf」和「填參數」只用引擎,不開 DB 視窗。
+- 參數建模的設計日取自所選氣象檔(有 .ddy 用 .ddy,沒有就從 EPW 檔頭的 ASHRAE 設計條件推算)。
+
 ## 三步驟
 
 1. 複製 `tools/modeler/example.json`,改成你的建築:
