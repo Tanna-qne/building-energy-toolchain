@@ -156,7 +156,7 @@
 2. 之後照常在 **Simulation → Update data** 跑模擬。跑完約 3–10 分鐘,瀏覽器會自動打開節能措施報告
    (用和 DB 同一個氣象檔)。結果在 `db_models/from_db/<模型名>/`,出錯看同資料夾的 `run.log`。
 
-**讓 agent 直接操作 DB**:`tools/designbuilder_mcp/` 是一個 MCP server(DSH 裡叫 `designbuilder`),
+**讓 agent 直接操作 DB**(英文說明:[docs/designbuilder-integration.md](docs/designbuilder-integration.md)):`tools/designbuilder_mcp/` 是一個 MCP server(DSH 裡叫 `designbuilder`),
 可以讀模型、改屬性、用 DB 跑模擬、算節能措施、由參數建 DB 模型。工具清單與注意事項見 `handover/HARNESS.md` §7。
 工具回傳的是白話摘要:`db_status` 會顯示授權剩幾天;`db_simulate` 給全年用能、單位面積能耗、分項、用電峰值與溫度沒達標的時數
 (同時寫一份 `summary.md` 在輸出資料夾);`db_report_status` 依「值不值得做」排好每個措施。
