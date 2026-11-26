@@ -10,7 +10,7 @@ The user builds and edits models in DesignBuilder. An AI assistant (through the 
 
 | Component | File | Role |
 |---|---|---|
-| DesignBuilder MCP server | [tools/designbuilder_mcp/server.py](../tools/designbuilder_mcp/server.py) | Eight tools that drive DesignBuilder through the official [db-process](https://github.com/DesignBuilderSoftware/db-process) command line (`/process=`) |
+| DesignBuilder MCP server | [tools/designbuilder_mcp/server.py](../tools/designbuilder_mcp/server.py) | Eleven tools that drive DesignBuilder through the official [db-process](https://github.com/DesignBuilderSoftware/db-process) command line (`/process=`) |
 | Command-line runner | [tools/designbuilder_mcp/cli.py](../tools/designbuilder_mcp/cli.py) | The same chain without an assistant: simulate a `.dsb`, then run the measures report |
 | Desktop app | [tools/app/app.py](../tools/app/app.py) | Pick a `.dsb` / `.idf`, or enter a few building parameters, choose weather, run, open the report |
 | Engine adapter | [tools/dbengine/](../tools/dbengine/) | Makes DesignBuilder's bundled EnergyPlus usable from the command line (see below) |
@@ -32,8 +32,11 @@ All operations work on a copy of the user's model in `db_models/dbmcp/<model>/`;
 | `db_open` | Opens a file in DesignBuilder for the user | Yes | Not recorded |
 | `db_zones` | Lists every zone with its block, IDF name, area and *effective* (inherited) activity, occupancy and set points, read through DesignBuilder's API | Yes (headless) | Yes (2026-11-26) |
 | `db_assign_activity` | Assigns a space type to zones (by IDF name, block or `*`): previews the change, then writes the activity template id **and** the template's values, saves, and reads them back | Yes (headless) | Yes (2026-11-26) |
+| `db_update_bridge` | Replaces an installed DbMcpBridge script inside a model with the repository version, without opening DesignBuilder's user interface, then runs a test job | Optional test (headless) | Yes (2026-11-26) |
 
 `db_zones` and `db_assign_activity` use [DbMcpBridge.cs](../tools/designbuilder_mcp/DbMcpBridge.cs), a C# script that must be added once to each model in Script Manager. Under `/process=` DesignBuilder loads scripts only when a calculation starts, so the job runs in the `Before*IdfGeneration` hooks of a heating design run (about one minute). Setting `ActivityTemplateId` through the API does not load the template's values (the user interface does), so the tool writes up to 37 activity attributes from DesignBuilder's own template library. Tested on the Model Geometry Example: three zones changed, 114 attributes written and read back, and the next annual simulation's IDF used the new occupancy densities and schedules.
+
+A `.dsb` file is a zip archive holding one `.skh` file, in which the script is stored as a length-prefixed string (newlines as `^`, `#` as `_HASH_`). `db_update_bridge` relies on this to update a script that is already installed. It backs up the model first and refuses to change anything if the layout is not as expected. Installing the script in a model for the first time still has to be done in Script Manager.
 
 Example of a `db_simulate` result (Model Geometry Example, London Gatwick weather, 2026-11-23): annual site energy 43,900 kWh, 134 kWh/m², interior lighting 58% of the total, peak electricity 12.1 kW, 2 unmet heating hours.
 

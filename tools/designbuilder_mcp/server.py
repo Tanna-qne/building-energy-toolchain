@@ -24,6 +24,7 @@ import subprocess
 import sys
 import time
 import xml.etree.ElementTree as ET
+import zipfile
 from datetime import date, datetime
 from pathlib import Path
 from typing import Optional
@@ -510,6 +511,65 @@ def db_zones(dsb_path: str) -> str:
     return "\n".join([f"## {dsb.stem}:{len(zones)} 個熱區({secs} 秒)", ""] + _fmt_zone_table(zones) +
                      ["", "要改用途,呼叫 `db_assign_activity`,熱區用 IDF 名稱或區塊名稱指定。",
                       f"可用的用途:{'、'.join(dblibrary.SPACE_TYPES)}"])
+
+
+BRIDGE_CS = HERE / "DbMcpBridge.cs"
+BRIDGE_MARKER = b"/*^DbMcpBridge"
+
+
+def _patch_bridge(dsb: Path):
+    """把 .dsb 裡已裝的 DbMcpBridge 換成 repo 版本。.dsb 是只含一個 .skh 的 zip;
+    腳本存成帶長度的字串(0xFF + 2 位元組 little-endian 長度), 換行存成 ^, # 存成 _HASH_。
+    回傳 (舊長度, 新長度, 備份檔); 已是最新版回傳 None。"""
+    src = BRIDGE_CS.read_text(encoding="ascii").replace("\r\n", "\n")
+    new = src.replace("#", "_HASH_").replace("\n", "^").encode("ascii")
+    with zipfile.ZipFile(dsb) as z:
+        infos = z.infolist()
+        if len(infos) != 1:
+            raise RuntimeError(f"{dsb.name} 的格式和預期不同(zip 裡有 {len(infos)} 個檔), 沒有更動。")
+        data = z.read(infos[0])
+    n = data.count(BRIDGE_MARKER)
+    if n == 0:
+        raise RuntimeError("這個模型裡沒有 DbMcpBridge, 只能更新、不能第一次安裝。" + BRIDGE_SETUP)
+    if n > 1:
+        raise RuntimeError(f"模型裡有 {n} 份 DbMcpBridge, 不確定要換哪一份, 沒有更動。請在 Script Manager 刪到只剩一份。")
+    start = data.index(BRIDGE_MARKER)
+    if data[start - 3] != 0xFF:
+        raise RuntimeError("腳本前的長度欄位和預期不同, 沒有更動。")
+    old_len = int.from_bytes(data[start - 2:start], "little")
+    if data[start:start + old_len] == new:
+        return None
+    patched = data[:start - 2] + len(new).to_bytes(2, "little") + new + data[start + old_len:]
+    backup = dsb.with_name(f"{dsb.stem}_before_bridge_update_{datetime.now():%Y%m%d_%H%M%S}.dsb")
+    shutil.copy2(dsb, backup)
+    tmp = dsb.with_suffix(".tmp")
+    with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr(infos[0], patched, compress_type=zipfile.ZIP_DEFLATED)
+    tmp.replace(dsb)
+    return old_len, len(new), backup
+
+
+@mcp.tool()
+def db_update_bridge(dsb_path: str, check: bool = True) -> str:
+    """把模型(副本)裡已裝的 DbMcpBridge 腳本換成 repo 裡的最新版, 不用開 DB 手動貼。
+    只能更新已裝過的模型; 第一次安裝仍要在 Script Manager 做。原檔先備份在同一個資料夾。
+    check=True 時在背景開 DB 跑一次測試工作(約 1 分鐘), 確認 DB 讀得到新版。"""
+    _check_idle()
+    dsb = _working_copy(dsb_path)
+    res = _patch_bridge(dsb)
+    if res is None:
+        lines = [f"`{dsb}` 裡的 DbMcpBridge 已經是最新版, 沒有更動。"]
+    else:
+        old_len, new_len, backup = res
+        lines = [f"已更新 `{dsb}` 裡的 DbMcpBridge({old_len} → {new_len} 字元)。備份:`{backup.name}`。"]
+    if check:
+        # 新版對找不到的熱區回 nozone(舊版寫 no matching zone), 這行不會改到任何東西
+        rows, secs = _bridge(dsb, [("dump", "ActivityTemplateId"), ("set", "_DBMCP_NO_SUCH_ZONE_", "OccupancyValue", "1")])
+        zones = (_zones(rows) or [[]])[-1]
+        ok = any(r[0] == "nozone" for r in rows) and rows[-1] == ["done"]
+        lines.append(f"DB 測試({secs} 秒):讀到 {len(zones)} 個熱區, " +
+                     ("新版腳本正常執行。" if ok else "但回應不是新版格式, 請確認 Script Manager 裡用的是這份腳本。"))
+    return "\n".join(lines)
 
 
 def _same(a, b):
