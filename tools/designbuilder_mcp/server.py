@@ -447,16 +447,20 @@ ZONE_KEYS = ("ActivityTemplateId", "OccupancyValue", "HeatingDesignSetPointTempe
              "ActiveCoolingDesignSetPointTemperature", "MinFreshAir", "OccupancySchedule")
 
 
-def _bridge(dsb: Path, lines, timeout_s=900):
+def _bridge(dsb: Path, lines, timeout_s=900, after=False):
     """把工作清單交給模型裡的 DbMcpBridge 執行。DB 只在開始計算時載入腳本, 所以順便跑一次暖房設計(約 1 分鐘)。
+    after=True 時等暖房設計算完才執行(匯入模型這類會換掉整棟建築的工作, 計算中做會讓 DB 當掉)。
     回傳 (輸出各行的欄位清單, 秒數)。"""
     job = dsb.parent / f"_job_{datetime.now():%Y%m%d_%H%M%S}.txt"
     job.write_text("\n".join("\t".join(map(str, ln)) for ln in lines) + "\n", encoding="ascii")
     os.environ["DBMCP_JOB"] = str(job)
+    if after:
+        os.environ["DBMCP_PHASE"] = "after"
     try:
         secs, _ = _run_chain(dsb, ProcessChain().switch_screen(Screen.HEATING_DESIGN).run(), timeout_s)
     finally:
         os.environ.pop("DBMCP_JOB", None)
+        os.environ.pop("DBMCP_PHASE", None)
     out = Path(str(job) + ".out")
     if not out.exists():
         raise RuntimeError(BRIDGE_SETUP)
@@ -475,11 +479,21 @@ def _zones(rows):
             if cur is None:
                 cur = []
                 dumps.append(cur)
-            cur.append({"block": r[2], "zone": r[3], "idf": r[4], "area": float(r[5]),
+            # 剛匯入、還沒算過的模型沒有 IDF 名稱, 改用熱區名稱(DbMcpBridge 的 set 兩者都認)
+            cur.append({"block": r[2], "zone": r[3], "idf": r[4] or r[3], "area": float(r[5]),
                         "attrs": dict(c.split("=", 1) for c in r[6:] if "=" in c)})
         else:
             cur = None
     return dumps
+
+
+def _after_map(rows):
+    """寫入後讀回的熱區屬性, 用 IDF 名稱與熱區名稱都查得到: 剛匯入的模型寫入時還沒有 IDF 名稱(用熱區名稱),
+    同一次 DB 計算後才產生 IDF 名稱。"""
+    out = {}
+    for z in (_zones(rows) or [[]])[-1]:
+        out[z["idf"]] = out[z["zone"]] = z["attrs"]
+    return out
 
 
 def _resolve(zones, selector):
@@ -629,7 +643,7 @@ def db_assign_activity(dsb_path: str, assignments: dict, apply: bool = False) ->
     keys = sorted({k for w in want.values() for k in w})
     job += [("dump", ",".join(keys)), ("save",)]
     rows, secs2 = _bridge(dsb, job)
-    after = {z["idf"]: z["attrs"] for z in (_zones(rows) or [[]])[-1]}
+    after = _after_map(rows)
     problems = [f"`{r[1]}` {r[2]}:這個熱區沒有此屬性" if r[0] == "nozone" else f"第 {r[1]} 行:{' '.join(r[2:])}"
                 for r in rows if r[0] in ("nozone", "lineerror")]
     mismatch = [f"`{idf}` {k}:應為 {v},讀回 {after.get(idf, {}).get(k, '(沒讀到)')}"
@@ -719,7 +733,7 @@ def db_assign_schedule(dsb_path: str, assignments: dict, apply: bool = False) ->
         job += [("set", idf, a, v) for a, v in want[idf].items()]
     job += [("dump", ",".join(keys)), ("save",)]
     rows, secs2 = _bridge(dsb, job)
-    after = {z["idf"]: z["attrs"] for z in (_zones(rows) or [[]])[-1]}
+    after = _after_map(rows)
     problems = [f"`{r[1]}` {r[2]}:這個熱區沒有此屬性" if r[0] == "nozone" else f"第 {r[1]} 行:{' '.join(r[2:])}"
                 for r in rows if r[0] in ("nozone", "lineerror")]
     mismatch = [f"`{idf}` {k}:應為 {v},讀回 {after.get(idf, {}).get(k, '(沒讀到)')}"
@@ -795,6 +809,16 @@ def db_assign_construction(dsb_path: str, climate_zone: str = "4A", building_typ
         notes[part] = note
         for a in attrs:
             want[a] = f"$NEW{len(copies)}"
+    # ASHRAE 基準地坪是 F 係數構造, 熱損失按外露周長算; 沒有外露周長的熱區(貼地的核心區)DB 會拒絕計算。
+    # 這些熱區改用同一組材料層的一般構造(表面熱阻取範本的一般地坪), 其他熱區維持 F 係數
+    slab = cons.get(want.get("CombinedGroundFloorConstr", ""), {})
+    slab_layered = None
+    if slab.get("DefinitionMethod", "").startswith("6"):
+        ref = cons.get(tmpl.get("GroundSlabConstr", ""), {})
+        copies.append((slab["Id"], {"DefinitionMethod": "1-Material layers", "FFactor": "0",
+                                    "SRO": ref.get("SRO") or "0.04", "SRI": ref.get("SRI") or "0.17",
+                                    "Name": f"{slab['Name']} - layers for interior zones (DbMcp)"}))
+        slab_layered = f"$NEW{len(copies)}"
 
     dsb = _working_copy(dsb_path)
     main = [a for _, attrs in dblibrary.ENVELOPE_PARTS for a in attrs] + ["GlazingType"]
@@ -804,6 +828,8 @@ def db_assign_construction(dsb_path: str, climate_zone: str = "4A", building_typ
     if apply:
         job += [("copy", "Constructions", base, *[f"{k}={v}" for k, v in ch.items()]) for base, ch in copies]
         job += [("bset", k, v) for k, v in want.items()]
+        if slab_layered:
+            job.append(("groundfix", slab_layered))
         job += [("bdump", ",".join(keys)), ("dump", ",".join(main))]
         if copies:
             job.append(("table", "Constructions", ",".join(f"$NEW{i + 1}" for i in range(len(copies)))))
@@ -833,6 +859,9 @@ def db_assign_construction(dsb_path: str, climate_zone: str = "4A", building_typ
               f"U 值依材料層與 DB 的表面熱阻計算(W/m²K);地坪以 F 係數表示,不算 U。外窗用 2019 基準 {dblibrary.GLAZING_BRACKET} "
               f"一檔:窗牆比 10% 以上各檔數值相同,只有 0–10% 在 CZ5–6 的日射透過率不同。"
               f"另有隔間、樓板、天花等 {len(internal)} 項內部或次要構造照範本一起寫入。"]
+    if slab_layered:
+        lines.append("地坪的 F 係數按外露周長計算熱損失;貼地但沒有外露周長的熱區(例如核心區)DB 無法計算,"
+                     "這些熱區會改用同一組材料層的一般構造,寫入時自動判斷。")
     if not apply:
         lines.append("確認無誤後,用同樣參數加上 apply=True 寫入。")
         return "\n".join(lines)
@@ -850,8 +879,14 @@ def db_assign_construction(dsb_path: str, climate_zone: str = "4A", building_typ
             problems.append(f"新構造的編號 {i} 不合理(應為 10000 以上、沒被用過);請勿使用這份模型,改用備份")
     mismatch = [f"建築 {k}:應為 {v},讀回 {after_b.get(k, '(沒讀到)')}" for k, v in resolved.items()
                 if not _same(after_b.get(k, ""), v)]
+    fixed = {r[1]: r[2] for r in rows if r[0] == "groundfix"}
+    layered_id = new_ids[int(slab_layered[4:]) - 1] if slab_layered and int(slab_layered[4:]) <= len(new_ids) else None
+    for zname, got in fixed.items():
+        if not _same(got, layered_id or ""):
+            problems.append(f"`{zname}` 地坪應改為 #{layered_id},讀回 {got}")
     overrides = [f"`{z['idf']}` {a}:{z['attrs'].get(a)}(應為 {resolved[a]})" for z in after_z for a in main
-                 if a in resolved and not _same(z["attrs"].get(a, ""), resolved[a])]
+                 if a in resolved and not _same(z["attrs"].get(a, ""), resolved[a])
+                 and not (a == "CombinedGroundFloorConstr" and z["zone"] in fixed)]
     new_u = []
     final_cons = _records(rows, "Constructions")
     for i, (base, ch) in enumerate(copies):
@@ -865,9 +900,126 @@ def db_assign_construction(dsb_path: str, climate_zone: str = "4A", building_typ
               f"- 讀回核對:{'全部一致' if not mismatch else f'**{len(mismatch)} 項不一致**'}。"]
     lines += [f"  - {m}" for m in (problems + mismatch)[:20]]
     lines += [f"- {m}" for m in new_u]
+    if slab_layered:
+        lines.append(f"- 地坪:{len(fixed)} 個熱區沒有外露周長,改用材料層版本 #{layered_id}" +
+                     (f"({'、'.join(sorted(fixed)[:10])})" if fixed else "") + ";其他貼地熱區維持 F 係數。")
     lines.append(f"- 熱區實際生效值:{'全部跟著建築層級' if not overrides else f'{len(overrides)} 項是熱區或區塊自己的設定,沒有改'}。")
     lines += [f"  - {m}" for m in overrides[:20]]
     lines.append(f"\n修改後的模型副本:`{dsb}`(用 `db_open` 打開檢查)")
+    return "\n".join(lines)
+
+
+# ---- 參數建模: 量體 → dsbXML → 匯入帶 DbMcpBridge 的模板 → 新的 .dsb ----
+
+TEMPLATE_DSB = WORK / "_template" / "template.dsb"
+TEMPLATE_NOTE = (f"需要一個裝好 DbMcpBridge 的模型當模板(任何模型都可以, 匯入時整個 Site 會被換掉, 只留腳本)。"
+                 f"第一次請用 template_dsb 參數指定, 之後會存一份在 {TEMPLATE_DSB}。")
+
+
+def _import_xml(xml: Path, out_dir: Path, name: str, template: Path):
+    """用模板模型裡的 DbMcpBridge 匯入 dsbXML 並另存成 out_dir/name.dsb。
+    匯入會換掉整個 Site, DB 接著計算會當掉, 所以腳本另存後直接結束 DB; DB 另存只寫出未壓縮的 .skh,
+    .dsb 就是裝著 "~name.skh" 的 zip, 這裡自己打包。"""
+    base = out_dir / "_import_base.dsb"
+    shutil.copy2(template, base)
+    res = _patch_bridge(base)
+    if res:
+        res[2].unlink(missing_ok=True)  # 暫用的副本, 不用留更新前的備份
+    skh = out_dir / f"{name}.skh"
+    skh.unlink(missing_ok=True)
+    try:
+        rows, secs = _bridge(base, [("importxml", str(xml)), ("saveas", name, str(out_dir) + "\\"), ("quit",)])
+    finally:
+        # DB 被腳本結束, 留下模板副本與它的鎖定檔
+        for f in (base, out_dir / "~_import_base.dsb.lck"):
+            f.unlink(missing_ok=True)
+    if not skh.exists():
+        raise RuntimeError("DB 沒有另存出模型(找不到 .skh)。DbMcpBridge 回應:" + " | ".join("\t".join(r) for r in rows))
+    data = skh.read_bytes()
+    if BRIDGE_MARKER not in data:
+        raise RuntimeError("新模型裡沒有 DbMcpBridge(匯入時沒保留下來), 沒有產生 .dsb。")
+    dsb = out_dir / f"{name}.dsb"
+    if dsb.exists():
+        shutil.copy2(dsb, out_dir / f"{name}_before_{datetime.now():%Y%m%d_%H%M%S}.dsb")
+    tmp = dsb.with_suffix(".tmp")
+    with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr(f"~{name}.skh", data)
+    tmp.replace(dsb)
+    skh.unlink()
+    return dsb, secs
+
+
+@mcp.tool()
+def db_build_model(params: dict, template_dsb: str = "") -> str:
+    """由量體參數直接建出 DesignBuilder 模型(.dsb), 每層切周邊區與核心區、按樓層套用途, 並產生分區圖。
+    建好的模型已裝 DbMcpBridge, 可以接著用 db_assign_construction / db_assign_schedule / db_simulate。
+
+    Args:
+        params: name(英文、數字、底線)與量體:
+            shape: rect | L | U | T | courtyard | podium_tower
+            rect: width, depth(m, x 向東、y 向北); L: 再加 notch_width, notch_depth(東北角挖掉);
+            U: notch_width, notch_depth(北側中間開口); T: stem_width, bar_depth(北側橫翼);
+            courtyard: court_width, court_depth(中央天井);
+            podium_tower: podium {width, depth, stories, floor_height}, tower {width, depth, stories,
+                floor_height, offset_x, offset_y}(塔樓預設置中, offset 從置中位置平移)
+            其他: stories(預設 1), floor_height(預設 3.6), wwr 窗牆比(預設 0.4),
+            uses 各層用途 {"1": "大廳", "2-5": "辦公", "6-": "會議"}, default_use(預設 辦公), perimeter_depth(預設 4.5)
+            用途只能用 db_zones 列出的中文用途; 數值都由 DB 範本庫帶入
+        template_dsb: 裝好 DbMcpBridge 的模型(第一次需要, 之後沿用)
+    """
+    uses = {**{"default": params.get("default_use", "辦公")}, **params.get("uses", {})}
+    try:
+        for use in uses.values():
+            dblibrary.resolve_space(use)
+    except KeyError as e:
+        raise ValueError(str(e).strip("'\""))
+    if template_dsb:
+        src = Path(template_dsb)
+        if not src.exists():
+            raise ValueError(f"找不到模板 {template_dsb}")
+        if BRIDGE_MARKER not in zipfile.ZipFile(src).read(zipfile.ZipFile(src).infolist()[0]):
+            raise ValueError("模板裡沒有 DbMcpBridge。" + BRIDGE_SETUP)
+        TEMPLATE_DSB.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, TEMPLATE_DSB)
+    if not TEMPLATE_DSB.exists():
+        raise ValueError(TEMPLATE_NOTE)
+    _check_idle()
+    name = str(params.get("name", ""))
+    if not re.fullmatch(r"[A-Za-z0-9_\-]+", name):
+        raise ValueError(f"name 只能用英文、數字、底線、減號, 收到 {name!r}")
+    out_dir = WORK / name
+    out_dir.mkdir(parents=True, exist_ok=True)
+    pj = out_dir / "params.json"
+    pj.write_text(json.dumps(params, ensure_ascii=False, indent=2), encoding="utf-8")
+    r = subprocess.run(stdin=subprocess.DEVNULL, args=[str(MODELER_PY), str(HERE / "massing.py"), str(pj), str(out_dir)],
+                       capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=900,
+                       creationflags=subprocess.CREATE_NO_WINDOW)
+    if r.returncode:
+        raise ValueError((r.stderr or r.stdout).strip().splitlines()[-1])
+    info = json.loads((out_dir / f"{name}_zones.json").read_text(encoding="utf-8"))
+    dsb, secs = _import_xml(Path(info["xml"]), out_dir, name, TEMPLATE_DSB)
+
+    by_floor = {}
+    for z in info["zones"]:
+        by_floor.setdefault(z["block"], z["use"])
+    report = db_assign_activity(str(dsb), by_floor, apply=True)
+    rows, _ = _bridge(dsb, [("dump", "ActivityTemplateId")])
+    zones = (_zones(rows) or [[]])[-1]
+    area_db, area_plan = sum(z["area"] for z in zones), info["floor_m2"]
+    names_missing = sorted({z["name"] for z in info["zones"]} - {z["zone"] for z in zones})
+    ok = len(zones) == len(info["zones"]) and not names_missing
+    lines = [f"## 建好模型:{name}", "",
+             f"- 量體 {params.get('shape', 'rect')},{info['floors']} 層,{len(info['zones'])} 個熱區,"
+             f"樓地板 {area_plan:,.0f} m²;" + (f"每層 {info['perimeter_offset']:g} m 周邊區加核心區。" if info["perimeter_offset"]
+                                             else "翼寬太窄,每層一區。"),
+             f"- 匯入 DB {secs} 秒;DB 讀回 {len(zones)} 個熱區,名稱{'與量體一致' if ok else '**與量體不一致**'};"
+             f"DB 的淨樓地板 {area_db:,.0f} m²(扣掉牆厚,比外輪廓面積 {area_plan:,.0f} m² 小是正常的)。"]
+    if names_missing:
+        lines.append(f"- DB 裡找不到的熱區名稱:{'、'.join(names_missing[:10])}")
+    lines += ["- 各層用途:" + "、".join(f"{b} {u}" for b, u in by_floor.items()), "",
+              f"模型:`{dsb}`", f"分區圖:`{info['plans']}`", "",
+              "下一步可用 `db_assign_construction`(圍護結構)、`db_assign_schedule`(作息)、`db_simulate`(模擬);"
+              "細部修改請用 `db_open` 在 DB 打開。", "", "---", "", report]
     return "\n".join(lines)
 
 

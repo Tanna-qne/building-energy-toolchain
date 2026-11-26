@@ -18,6 +18,10 @@ Job file lines (tab separated):
                                       @n means the n-th record, +n every record with id n or more
   copy<TAB>Table<TAB>id<TAB>k=v...    add a record copied from record id, with the given fields changed;
                                       later lines can use its new id as $NEW1, $NEW2, ...
+  importxml<TAB>path                  import a dsbXML file (Site.ImportXMLFile); later lines work on the last building
+  groundfix<TAB>id                    zones whose ground floor has no exposed perimeter get ground floor construction id
+  saveas<TAB>name<TAB>folder          save the model as folder\name.dsb
+  quit                                end DesignBuilder once the job is written (after importxml)
   save                                save the model
 
 Keep this file ASCII only and do not use the logical-or operator:
@@ -97,9 +101,18 @@ namespace DB.Extensibility.Scripts
             Log("hook AfterEnergySimulation");
         }
 
+        // DBMCP_PHASE=after: run the job only once the calculation has finished. Importing a model while
+        // DesignBuilder is generating the IDF replaces objects it is still using and DB fails ("Automation error").
+        bool AfterPhase()
+        {
+            return System.Environment.GetEnvironmentVariable("DBMCP_PHASE") == "after";
+        }
+
         public override void AfterHeatingSimulation()
         {
             Log("hook AfterHeatingSimulation");
+            if (AfterPhase())
+                RunJob("AfterHeatingSimulation", true);
         }
 
         public override void AfterCoolingSimulation()
@@ -109,8 +122,15 @@ namespace DB.Extensibility.Scripts
 
         void RunJob(string from)
         {
+            RunJob(from, false);
+        }
+
+        void RunJob(string from, bool after)
+        {
             string job = JobPath();
             if (done)
+                return;
+            if (AfterPhase() != after)
                 return;
             if (string.IsNullOrEmpty(job))
                 return;
@@ -120,6 +140,7 @@ namespace DB.Extensibility.Scripts
                 return;
             }
             done = true;
+            bool quit = false;
             var output = new List<string>();
             try
             {
@@ -157,6 +178,14 @@ namespace DB.Extensibility.Scripts
                             TableDump(f[1], f[2].Split(','), output);
                         else if (op == "copy" && f.Length > 2)
                             TableCopy(f, output);
+                        else if (op == "importxml" && f.Length > 1)
+                            building = ImportXml(building, f[1], output);
+                        else if (op == "groundfix" && f.Length > 1)
+                            GroundFix(building, f[1], output);
+                        else if (op == "saveas" && f.Length > 2)
+                            output.Add("saveas\t" + ApiEnvironment.DocumentFileOperations.SaveAs(f[1], f[2]));
+                        else if (op == "quit")
+                            quit = true;
                         else if (op == "save")
                             output.Add("save\t" + ApiEnvironment.DocumentFileOperations.Save());
                     }
@@ -174,6 +203,12 @@ namespace DB.Extensibility.Scripts
             }
             File.WriteAllLines(job + ".out", output);
             Log("job finished, " + output.Count + " lines");
+            if (quit)
+            {
+                // the calculation that loaded this script would go on with objects the job replaced and fail
+                Log("quit");
+                System.Diagnostics.Process.GetCurrentProcess().Kill();
+            }
         }
 
         void Dump(Building building, string[] attrs, List<string> output)
@@ -195,6 +230,75 @@ namespace DB.Extensibility.Scripts
                     output.Add(string.Join("\t", cells.ToArray()));
                 }
                 b++;
+            }
+        }
+
+        // Importing replaces the whole site, including the model's own scripts (EMSPrograms records from 10000)
+        // and the switches that select them, so keep them and put them back: the new model keeps this bridge.
+        Building ImportXml(Building building, string path, List<string> output)
+        {
+            string[] keys = { "EMSOn", "EMSId" };
+            var attrs = new Dictionary<string, string>();
+            foreach (string k in keys)
+                attrs[k] = building.GetAttribute(k);
+            var scripts = new List<Dictionary<string, string>>();
+            Table t = ApiEnvironment.Site.GetTable("EMSPrograms");
+            int v;
+            if (t != null)
+                foreach (Record r in t.Records)
+                    if (int.TryParse(r["Id"], out v) && v >= 10000)
+                    {
+                        var copy = new Dictionary<string, string>();
+                        for (int i = 0; i < r.FieldCount; i++)
+                            copy[r.GetKeyFromIndex(i)] = r[i];
+                        scripts.Add(copy);
+                    }
+            output.Add("info\tkept " + scripts.Count + " scripts, EMSOn=" + attrs["EMSOn"] + " EMSId=" + attrs["EMSId"]);
+
+            bool ok = ApiEnvironment.Site.ImportXMLFile(path);
+            building = ApiEnvironment.Site.Buildings[ApiEnvironment.Site.Buildings.Count - 1];
+            output.Add("importxml\t" + ok + "\tbuildings=" + ApiEnvironment.Site.Buildings.Count);
+
+            Table nt = ApiEnvironment.Site.GetTable("EMSPrograms");
+            foreach (var s in scripts)
+            {
+                Record r = nt.AddRecord();
+                foreach (var kv in s)
+                    r[kv.Key] = kv.Value;
+                output.Add("restored\tEMSPrograms\t" + r["Id"]);
+            }
+            foreach (string k in keys)
+                if (!string.IsNullOrEmpty(attrs[k]))
+                    building.SetAttribute(k, attrs[k]);
+            output.Add("info\tafter import EMSOn=" + building.GetAttribute("EMSOn") + " EMSId=" + building.GetAttribute("EMSId"));
+            return building;
+        }
+
+        // An F-factor ground floor needs an exposed perimeter; DesignBuilder refuses to calculate a zone whose
+        // ground floor has none (an interior core zone). Give those zones the layered construction instead.
+        void GroundFix(Building building, string layeredId, List<string> output)
+        {
+            foreach (BuildingBlock block in building.BuildingBlocks)
+            {
+                foreach (Zone zone in block.Zones)
+                {
+                    double area = 0, length = 0;
+                    foreach (Surface s in zone.Surfaces)
+                        foreach (Adjacency a in s.Adjacencies)
+                            if (a.AdjacencyCondition == AdjacencyCondition.AdjacentToGround)
+                            {
+                                area += a.Area;
+                                length += a.ExposedWallGroundFloorLength;
+                            }
+                    if (area <= 0)
+                        continue;
+                    output.Add("ground\t" + zone.Name + "\t" + zone.IdfName + "\t" + area.ToString("0.##") + "\t" + length.ToString("0.##"));
+                    if (length < 0.01)
+                    {
+                        zone.SetAttribute("CombinedGroundFloorConstr", layeredId);
+                        output.Add("groundfix\t" + zone.Name + "\t" + zone.GetAttribute("CombinedGroundFloorConstr"));
+                    }
+                }
             }
         }
 

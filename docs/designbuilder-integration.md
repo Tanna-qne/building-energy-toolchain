@@ -10,7 +10,7 @@ The user builds and edits models in DesignBuilder. An AI assistant (through the 
 
 | Component | File | Role |
 |---|---|---|
-| DesignBuilder MCP server | [tools/designbuilder_mcp/server.py](../tools/designbuilder_mcp/server.py) | Fourteen tools that drive DesignBuilder through the official [db-process](https://github.com/DesignBuilderSoftware/db-process) command line (`/process=`) |
+| DesignBuilder MCP server | [tools/designbuilder_mcp/server.py](../tools/designbuilder_mcp/server.py) | Fifteen tools that drive DesignBuilder through the official [db-process](https://github.com/DesignBuilderSoftware/db-process) command line (`/process=`) |
 | Command-line runner | [tools/designbuilder_mcp/cli.py](../tools/designbuilder_mcp/cli.py) | The same chain without an assistant: simulate a `.dsb`, then run the measures report |
 | Desktop app | [tools/app/app.py](../tools/app/app.py) | Pick a `.dsb` / `.idf`, or enter a few building parameters, choose weather, run, open the report |
 | Engine adapter | [tools/dbengine/](../tools/dbengine/) | Makes DesignBuilder's bundled EnergyPlus usable from the command line (see below) |
@@ -32,6 +32,7 @@ All operations work on a copy of the user's model in `db_models/dbmcp/<model>/`;
 | `db_open` | Opens a file in DesignBuilder for the user | Yes | Not recorded |
 | `db_zones` | Lists every zone with its block, IDF name, area and *effective* (inherited) activity, occupancy and set points, read through DesignBuilder's API | Yes (headless) | Yes (2026-11-26) |
 | `db_assign_activity` | Assigns a space type to zones (by IDF name, block or `*`): previews the change, then writes the activity template id **and** the template's values, saves, and reads them back | Yes (headless) | Yes (2026-11-26) |
+| `db_build_model` | Builds a DesignBuilder model from massing parameters (rectangle, L, U, T, courtyard, podium with tower): 4.5 m perimeter zones plus a core on every floor, one use per floor from DesignBuilder's activity templates, and a floor plan page with a zone table | Yes (headless) | Yes (2026-11-26) |
 | `db_find_schedules` | Searches DesignBuilder's schedule library by name and shows each schedule's weekday, Saturday and Sunday profile | No | Yes (2026-11-26) |
 | `db_assign_schedule` | Assigns existing library schedules (occupancy, lighting, equipment, hot water) to zones: preview, then write, save and read back. It never creates new schedules | Yes (headless) | Yes (2026-11-26) |
 | `db_assign_construction` | Applies the ASHRAE 90.1-2019 baseline constructions for a climate zone (default 4A) and building type at building level: walls, roofs, exposed and ground floors, doors, glazing, internal constructions and infiltration. An optional target U for walls, roofs or exposed floors adds a copy of the baseline construction with a thicker or thinner insulation layer | Yes (headless) | Yes (2026-11-26) |
@@ -45,6 +46,16 @@ The schedule and construction tools take their values only from DesignBuilder's 
 - When DesignBuilder generates the IDF, walls use `WallConstr`, but flat roofs, exposed floors and ground floors use the `Combined*` attributes (for example `CombinedFlatRoofConstr`), not `FlatRoofConstr`. The tool writes both kinds as the template defines them.
 - `Table.GetUniqueId()` returned 0, so the bridge gives a new record the largest existing id plus one (at least 10000).
 - After applying the CZ4 baseline with a wall target of U 0.4, the annual simulation's IDF had a 76 mm wall insulation layer, the ASHRAE roof and floor layers, an F-factor ground floor, glazing U 3.24 and SHGC 0.39, 0.7 ach infiltration and the newly assigned occupancy and hot water schedules.
+
+`db_build_model` generates the massing with [dragonfly](https://github.com/ladybug-tools/dragonfly-core) and writes dsbXML with honeybee-designbuilder ([massing.py](../tools/designbuilder_mcp/massing.py)). The bridge then imports it into a copy of a template model that already contains DbMcpBridge (`Site.ImportXMLFile`) and saves it under the new name (`DocumentFileOperations.SaveAs`). Three findings from testing:
+
+- Importing replaces the whole site, including the model's own scripts (`EMSPrograms` records from 10000) and the `EMSOn` / `EMSId` building attributes that select them. The bridge keeps these and writes them back after the import, so the new model can be used with the bridge tools straight away, without a manual install.
+- If the calculation that loaded the script keeps running after the import, DesignBuilder fails ("Automation error"). This happens both before IDF generation and after the calculation. The bridge therefore ends the DesignBuilder process once the job output is written.
+- `SaveAs` writes an uncompressed `.skh` file (and does not add a path separator between the folder and the name). The tool packs it into a `.dsb`, which is a zip archive holding `~name.skh`.
+
+The ASHRAE 2019 baseline ground floor is an F-factor construction, and DesignBuilder refuses to calculate a zone whose ground floor has no exposed perimeter (a core zone): "has zero exposed perimeter. Replace the F-factor construction with a layered construction". `db_assign_construction` therefore adds a layered copy of the same construction and, through the bridge, gives it only to zones whose ground floor has no exposed perimeter (`Adjacency.ExposedWallGroundFloorLength`). Other ground floor zones keep the F-factor construction. Tested on a two-storey U-shaped model with 18 zones: one core zone was switched, and the annual simulation ran with eight F-factor ground floors.
+
+Zones are named `F03 North` / `F03 Core`, and blocks are named by floor (`F03`). The IDF names only appear after DesignBuilder's first calculation, so the tools also accept zone names.
 
 A `.dsb` file is a zip archive holding one `.skh` file, in which the script is stored as a length-prefixed string (newlines as `^`, `#` as `_HASH_`). `db_update_bridge` relies on this to update a script that is already installed. It backs up the model first and refuses to change anything if the layout is not as expected. Installing the script in a model for the first time still has to be done in Script Manager.
 
