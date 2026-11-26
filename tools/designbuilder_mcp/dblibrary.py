@@ -209,7 +209,11 @@ def construction_u(cid):
     """從材料層算 U 值: U = 1 / (SRO + Σ 厚度/導熱係數 + SRI), 只取前 NumberLayers 層。
     範本庫裡存的 U-Value 欄位有些沒更新(例如 ASHRAE 2013 / 2019 的屋頂), 所以不用它。
     回傳 (U, 層清單); 地坪這類以 F 係數表示、沒有表面熱阻的構造回傳 (None, 層清單)。"""
-    c = table("Constructions").get(str(cid))
+    return construction_u_row(table("Constructions").get(str(cid)))
+
+
+def construction_u_row(c):
+    """同 construction_u, 但直接給構造的欄位(例如從模型裡讀出來、範本庫沒有的構造)。"""
     if not c:
         return None, []
     mats = table("Materials")
@@ -222,11 +226,112 @@ def construction_u(cid):
             continue
         ri = th / k if k else (num(m, "R-Value") or 0.0)
         r += ri
-        layers.append({"material": m.get("Name", ""), "thickness_m": th, "conductivity": k, "R": ri})
+        layers.append({"index": i, "material": m.get("Name", ""), "thickness_m": th, "conductivity": k, "R": ri})
     sro, sri = num(c, "SRO"), num(c, "SRI")
     if sro is None or sri is None or not layers:
         return None, layers
     return 1 / (sro + r + sri), layers
+
+
+# ---- 圍護結構: ASHRAE 90.1-2019 基準(Appendix G)----
+
+BUILDING_TYPES = {"非住宅": ("Nonresidential", "Non-Res"), "住宅": ("Residential", "Residential"),
+                  "半空調": ("Semiheated", "Semiheated")}  # 構造範本名稱, 玻璃名稱裡的寫法
+# 主要外殼部位 → DB 屬性。實測: DB 產生 IDF 時屋頂 / 地坪 / 外挑樓板用 Combined* 欄位, 不用 FlatRoofConstr 等
+ENVELOPE_PARTS = (("外牆", ("WallConstr",)), ("屋頂", ("CombinedFlatRoofConstr", "PitchedRoofConstr")),
+                  ("外挑樓板", ("CombinedExternalFloorConstr",)), ("地坪", ("CombinedGroundFloorConstr",)),
+                  ("外門", ("ExternalDoorConstr",)))
+TARGET_U_PARTS = ("外牆", "屋頂", "外挑樓板")  # 有保溫層可調的部位; 地坪用 F 係數、外門沒有保溫層
+GLAZING_BRACKET = "30% to 40% of Wall"  # 2019 基準玻璃按窗牆比分檔, 10% 以上各檔數值相同; 只有 0–10% 在 CZ5–6 不同
+
+
+def parse_climate_zone(cz):
+    """"4A" / "CZ4" / "3C" → ("4", "A")。"""
+    s = str(cz).upper().replace("CZ", "").strip()
+    if not s or not s[0].isdigit() or s[0] not in "012345678":
+        raise ValueError(f"看不懂氣候區「{cz}」; 請給 ASHRAE 氣候區, 例如 4A、5B、3C")
+    return s[0], s[1:2]
+
+
+def baseline_envelope(climate_zone="4A", building_type="非住宅"):
+    """ASHRAE 90.1-2019 基準: (構造範本 row, 外窗玻璃 row)。都直接取自 DB 範本庫。"""
+    if building_type not in BUILDING_TYPES:
+        raise KeyError(f"不認得的建築類型「{building_type}」; 可用的有: {'、'.join(BUILDING_TYPES)}")
+    n, letter = parse_climate_zone(climate_zone)
+    tname, gname = BUILDING_TYPES[building_type]
+    want = f"CZ{n} {tname} Baseline Constructions [2019]"
+    tmpl = next((r for r in table("ConstructionTemplates").values() if r["Name"] == want), None)
+    if tmpl is None:
+        raise KeyError(f"本機 DB 範本庫裡找不到「{want}」")
+    glazing = []
+    for g in table("Glazing").values():
+        name = g["Name"]
+        if f", {gname}, Vertical Glazing, {GLAZING_BRACKET}" not in name or not name.endswith("[2019]"):
+            continue
+        prefix = name.split(f", {gname}, ")[0]  # "CZ4", 或 CZ3 分組的 "CZ3 (A, B)" / "CZ3 (C)"
+        if prefix == f"CZ{n}" or (prefix.startswith(f"CZ{n} (") and (not letter or letter in prefix[4:])):
+            glazing.append(g)
+    if not glazing:
+        raise KeyError(f"本機 DB 範本庫裡找不到 CZ{n}{letter} {gname} 的 2019 基準外窗")
+    return tmpl, min(glazing, key=lambda g: int(g["Id"]))
+
+
+def template_construction_attributes(row):
+    """套用構造範本時要寫入的屬性: 範本裡所有 *Constr 欄位與滲風。DB 介面換範本會載入這些, API 只改編號不會。"""
+    out = [(k, v) for k, v in row.items() if k.endswith("Constr") and v != ""]
+    return out + [(k, row[k]) for k in ("InfiltrationOn", "InfiltrationValue") if row.get(k, "") != ""]
+
+
+def adjust_to_u(c, target_u):
+    """把構造(欄位 dict)裡熱阻最大的那層(保溫層)改厚或改薄, 讓 U 等於 target_u。
+    回傳 (要改的欄位, 說明)。目標做不到(拿掉保溫也不夠)就拋 ValueError, 不硬湊。"""
+    u0, layers = construction_u_row(c)
+    if u0 is None:
+        raise ValueError(f"「{c.get('Name', '')}」算不出 U 值, 不能用目標 U 調整")
+    ins = max((l for l in layers if l["conductivity"]), key=lambda l: l["R"], default=None)
+    if ins is None:
+        raise ValueError(f"「{c.get('Name', '')}」沒有可以調厚度的材料層")
+    r_rest = 1 / u0 - ins["R"]
+    need = 1 / target_u - r_rest
+    if need <= 0.001:
+        raise ValueError(f"目標 U {target_u} 太高: 拿掉「{ins['material']}」U 也只有 {1 / r_rest:.3f}")
+    th = need * ins["conductivity"]
+    changes = {f"Thick {ins['index']}": f"{th:.6f}", "U-Value": f"{target_u:.6f}",
+               "Name": f"{c.get('Name', '')} -> U {target_u:g} (DbMcp)"}
+    note = (f"{ins['material']} {ins['thickness_m'] * 1000:.0f} → {th * 1000:.0f} mm"
+            f"(U {u0:.3f} → {target_u:g})")
+    return changes, note
+
+
+# ---- 作息: 只從 DB 庫裡選, 不產生新的 ----
+
+SCHEDULE_KINDS = {"人員": ("OccupancySchedule",), "照明": ("FluorescentLightingSchedule",),
+                  "設備": ("ComputersSchedule", "EquipmentSchedule", "MiscellaneousSchedule",
+                         "CateringSchedule", "ProcessSchedule"),
+                  "熱水": ("DHWSchedule",)}
+
+
+def find_schedules(keyword, limit=20):
+    """名稱包含所有關鍵字(空白分隔, 不分大小寫)的作息, 依編號排序。"""
+    words = keyword.lower().split()
+    rows = [s for s in table("Schedules").values() if all(w in s["Name"].lower() for w in words)]
+    return sorted(rows, key=lambda s: int(s["Id"]))[:limit], len(rows)
+
+
+def resolve_schedule(ref):
+    """作息編號或完整名稱 → row。名稱重複(DB 庫裡約 960 個名稱有多份)時拋錯並列出編號, 不自己挑。"""
+    s = table("Schedules")
+    ref = str(ref).strip()
+    if ref.isdigit():
+        if ref not in s:
+            raise KeyError(f"DB 庫裡沒有編號 {ref} 的作息")
+        return s[ref]
+    hits = [r for r in s.values() if r["Name"] == ref]
+    if not hits:
+        raise KeyError(f"DB 庫裡沒有叫「{ref}」的作息; 先用 db_find_schedules 找")
+    if len(hits) > 1:
+        raise KeyError(f"「{ref}」有 {len(hits)} 份(編號 {', '.join(h['Id'] for h in hits)}), 請用編號指定")
+    return hits[0]
 
 
 # 範本裡 ASHRAE 的屋頂 / 地坪構造放在 Combined* 欄位; FlatRoofConstr 等引用的是 DB 的通用構造, 兩者並列讓差異看得到

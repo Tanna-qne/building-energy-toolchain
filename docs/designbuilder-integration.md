@@ -10,7 +10,7 @@ The user builds and edits models in DesignBuilder. An AI assistant (through the 
 
 | Component | File | Role |
 |---|---|---|
-| DesignBuilder MCP server | [tools/designbuilder_mcp/server.py](../tools/designbuilder_mcp/server.py) | Eleven tools that drive DesignBuilder through the official [db-process](https://github.com/DesignBuilderSoftware/db-process) command line (`/process=`) |
+| DesignBuilder MCP server | [tools/designbuilder_mcp/server.py](../tools/designbuilder_mcp/server.py) | Fourteen tools that drive DesignBuilder through the official [db-process](https://github.com/DesignBuilderSoftware/db-process) command line (`/process=`) |
 | Command-line runner | [tools/designbuilder_mcp/cli.py](../tools/designbuilder_mcp/cli.py) | The same chain without an assistant: simulate a `.dsb`, then run the measures report |
 | Desktop app | [tools/app/app.py](../tools/app/app.py) | Pick a `.dsb` / `.idf`, or enter a few building parameters, choose weather, run, open the report |
 | Engine adapter | [tools/dbengine/](../tools/dbengine/) | Makes DesignBuilder's bundled EnergyPlus usable from the command line (see below) |
@@ -32,9 +32,19 @@ All operations work on a copy of the user's model in `db_models/dbmcp/<model>/`;
 | `db_open` | Opens a file in DesignBuilder for the user | Yes | Not recorded |
 | `db_zones` | Lists every zone with its block, IDF name, area and *effective* (inherited) activity, occupancy and set points, read through DesignBuilder's API | Yes (headless) | Yes (2026-11-26) |
 | `db_assign_activity` | Assigns a space type to zones (by IDF name, block or `*`): previews the change, then writes the activity template id **and** the template's values, saves, and reads them back | Yes (headless) | Yes (2026-11-26) |
+| `db_find_schedules` | Searches DesignBuilder's schedule library by name and shows each schedule's weekday, Saturday and Sunday profile | No | Yes (2026-11-26) |
+| `db_assign_schedule` | Assigns existing library schedules (occupancy, lighting, equipment, hot water) to zones: preview, then write, save and read back. It never creates new schedules | Yes (headless) | Yes (2026-11-26) |
+| `db_assign_construction` | Applies the ASHRAE 90.1-2019 baseline constructions for a climate zone (default 4A) and building type at building level: walls, roofs, exposed and ground floors, doors, glazing, internal constructions and infiltration. An optional target U for walls, roofs or exposed floors adds a copy of the baseline construction with a thicker or thinner insulation layer | Yes (headless) | Yes (2026-11-26) |
 | `db_update_bridge` | Replaces an installed DbMcpBridge script inside a model with the repository version, without opening DesignBuilder's user interface, then runs a test job | Optional test (headless) | Yes (2026-11-26) |
 
 `db_zones` and `db_assign_activity` use [DbMcpBridge.cs](../tools/designbuilder_mcp/DbMcpBridge.cs), a C# script that must be added once to each model in Script Manager. Under `/process=` DesignBuilder loads scripts only when a calculation starts, so the job runs in the `Before*IdfGeneration` hooks of a heating design run (about one minute). Setting `ActivityTemplateId` through the API does not load the template's values (the user interface does), so the tool writes up to 37 activity attributes from DesignBuilder's own template library. Tested on the Model Geometry Example: three zones changed, 114 attributes written and read back, and the next annual simulation's IDF used the new occupancy densities and schedules.
+
+The schedule and construction tools take their values only from DesignBuilder's library, so the assistant chooses among existing items and never types numbers. The exception is a target U, which the user gives. Findings from testing on the same model:
+
+- The model's tables (`Site.GetTable`) contain the whole library (2717 constructions, 4274 schedules), so library ids can be used directly.
+- When DesignBuilder generates the IDF, walls use `WallConstr`, but flat roofs, exposed floors and ground floors use the `Combined*` attributes (for example `CombinedFlatRoofConstr`), not `FlatRoofConstr`. The tool writes both kinds as the template defines them.
+- `Table.GetUniqueId()` returned 0, so the bridge gives a new record the largest existing id plus one (at least 10000).
+- After applying the CZ4 baseline with a wall target of U 0.4, the annual simulation's IDF had a 76 mm wall insulation layer, the ASHRAE roof and floor layers, an F-factor ground floor, glazing U 3.24 and SHGC 0.39, 0.7 ach infiltration and the newly assigned occupancy and hot water schedules.
 
 A `.dsb` file is a zip archive holding one `.skh` file, in which the script is stored as a length-prefixed string (newlines as `^`, `#` as `_HASH_`). `db_update_bridge` relies on this to update a script that is already installed. It backs up the model first and refuses to change anything if the layout is not as expected. Installing the script in a model for the first time still has to be done in Script Manager.
 

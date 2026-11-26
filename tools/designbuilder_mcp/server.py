@@ -643,6 +643,234 @@ def db_assign_activity(dsb_path: str, assignments: dict, apply: bool = False) ->
     return "\n".join(lines)
 
 
+# ---- 作息: 只從 DB 庫裡選 ----
+
+def _sched_label(sid):
+    name = dblibrary.name_of("Schedules", sid)
+    return f"{name} (#{sid})" if name else f"#{sid}"
+
+
+def _sched_spark(sid):
+    h = dblibrary.schedule_hours(sid)
+    return f"`{dblibrary.spark(h['平日'])}`" if h else "—"
+
+
+@mcp.tool()
+def db_find_schedules(keyword: str, limit: int = 20) -> str:
+    """在本機 DB 作息庫裡找作息(名稱包含所有關鍵字, 空白分隔, 不分大小寫), 列出編號、名稱、來源與平日 / 週六 / 週日的
+    逐時小圖。給 db_assign_schedule 選用; 不開 DB。例: "office occ"、"retail light"、"24/7"。"""
+    rows, total = dblibrary.find_schedules(keyword, limit)
+    lines = [f"## 作息「{keyword}」:{total} 筆" + (f",列出前 {limit} 筆" if total > limit else ""), "",
+             "| 編號 | 名稱 | 來源 | 平日 | 週六 | 週日 |", "|---:|---|---|---|---|---|"]
+    for s in rows:
+        h = dblibrary.schedule_hours(s["Id"])
+        cells = [f"`{dblibrary.spark(h[d])}`" if h else "—" for d in ("平日", "週六", "週日")]
+        lines.append(f"| {s['Id']} | {s['Name']} | {s.get('Source', '')} | " + " | ".join(cells) + " |")
+    lines += ["", "小圖每格一小時(0–24 時),越高越滿。名稱重複時請用編號指定。"]
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def db_assign_schedule(dsb_path: str, assignments: dict, apply: bool = False) -> str:
+    """把熱區的作息換成 DB 作息庫裡既有的作息(不產生新作息)。
+
+    Args:
+        dsb_path: .dsb 的完整路徑(操作的是副本, 不改原檔)
+        assignments: {熱區選擇器: {種類: 作息編號或完整名稱}}; 選擇器是 IDF 名稱、區塊名稱或 "*";
+            種類: 人員、照明、設備(電腦、辦公設備、雜項、餐飲、製程一起換)、熱水。
+            例如 {"*": {"照明": 1097}, "Ground floor block": {"人員": "Office_OpenOff_Occ"}}; 作息用 db_find_schedules 找
+        apply: False(預設)只產生預覽; 使用者確認後再用 True 寫入、存檔並讀回核對
+    """
+    dsb = _working_copy(dsb_path)
+    plan = {}
+    try:
+        for sel, kinds in assignments.items():
+            for kind, ref in kinds.items():
+                if kind not in dblibrary.SCHEDULE_KINDS:
+                    raise KeyError(f"不認得的作息種類「{kind}」; 可用的有: {'、'.join(dblibrary.SCHEDULE_KINDS)}")
+                plan.setdefault(sel, {})[kind] = dblibrary.resolve_schedule(ref)
+    except KeyError as e:
+        raise ValueError(str(e).strip("'\""))
+    keys = sorted({a for attrs in dblibrary.SCHEDULE_KINDS.values() for a in attrs})
+    rows, secs = _bridge(dsb, [("dump", ",".join(keys))])
+    zones = (_zones(rows) or [[]])[-1]
+    targets = {}  # idf → {種類: 作息 row}
+    for sel, kinds in plan.items():
+        hit = _resolve(zones, sel)
+        if not hit:
+            raise ValueError(f"找不到熱區或區塊「{sel}」;可用 db_zones 查看名稱")
+        for z in hit:
+            targets.setdefault(z["idf"], {}).update(kinds)
+    attrs_of = {z["idf"]: z["attrs"] for z in zones}
+    lines = [f"## 套用作息{'(已寫入)' if apply else '(預覽,尚未寫入)'}:{dsb.stem}", "",
+             "| 熱區 | 種類 | 目前 | 改成 | 改成的平日作息 |", "|---|---|---|---|---|"]
+    for idf, kinds in targets.items():
+        for kind, s in kinds.items():
+            cur = attrs_of[idf].get(dblibrary.SCHEDULE_KINDS[kind][0], "")
+            lines.append(f"| `{idf}` | {kind} | {_sched_label(cur)} | {_sched_label(s['Id'])} | {_sched_spark(s['Id'])} |")
+    lines += ["", "作息全部取自本機 DB 作息庫;「設備」會同時換電腦、辦公設備、雜項、餐飲、製程五項的作息。"]
+    if not apply:
+        lines.append("確認無誤後,用同樣參數加上 apply=True 寫入。")
+        return "\n".join(lines)
+
+    job, want = [], {}
+    for idf, kinds in targets.items():
+        want[idf] = {a: s["Id"] for kind, s in kinds.items() for a in dblibrary.SCHEDULE_KINDS[kind]}
+        job += [("set", idf, a, v) for a, v in want[idf].items()]
+    job += [("dump", ",".join(keys)), ("save",)]
+    rows, secs2 = _bridge(dsb, job)
+    after = {z["idf"]: z["attrs"] for z in (_zones(rows) or [[]])[-1]}
+    problems = [f"`{r[1]}` {r[2]}:這個熱區沒有此屬性" if r[0] == "nozone" else f"第 {r[1]} 行:{' '.join(r[2:])}"
+                for r in rows if r[0] in ("nozone", "lineerror")]
+    mismatch = [f"`{idf}` {k}:應為 {v},讀回 {after.get(idf, {}).get(k, '(沒讀到)')}"
+                for idf, w in want.items() for k, v in w.items() if not _same(after.get(idf, {}).get(k, ""), v)]
+    saved = any(r[0] == "save" and r[1] == "True" for r in rows)
+    lines += ["", f"### 寫入結果({secs + secs2} 秒)", "",
+              f"- 寫入 {sum(len(w) for w in want.values())} 項屬性,{len(targets)} 個熱區;存檔:{'成功' if saved else '**失敗**'}。",
+              f"- 讀回核對:{'全部一致' if not mismatch else f'**{len(mismatch)} 項不一致**'}。"]
+    lines += [f"  - {m}" for m in (problems + mismatch)[:20]]
+    lines.append(f"\n修改後的模型副本:`{dsb}`(用 `db_open` 打開檢查)")
+    return "\n".join(lines)
+
+
+# ---- 圍護結構: ASHRAE 90.1-2019 基準, 可選目標 U ----
+
+def _buildings(rows):
+    return [dict(c.split("=", 1) for c in r[1:] if "=" in c) for r in rows if r[0] == "building"]
+
+
+def _records(rows, table):
+    return {r[2]: dict(c.split("=", 1) for c in r[3:] if "=" in c) for r in rows if r[0] == "rec" and r[1] == table}
+
+
+def _cons_label(cid, model_cons):
+    """構造編號 → (名稱, U)。模型自己的構造(編號 10000 起)用模型裡讀出的欄位, 其他用範本庫。"""
+    row = model_cons.get(str(cid)) or dblibrary.table("Constructions").get(str(cid))
+    if not row:
+        return f"#{cid}", None
+    return row.get("Name", f"#{cid}"), dblibrary.construction_u_row(row)[0]
+
+
+def _u(u):
+    return f"{u:.3f}" if u else "—(F 係數)"
+
+
+@mcp.tool()
+def db_assign_construction(dsb_path: str, climate_zone: str = "4A", building_type: str = "非住宅",
+                           target_u: Optional[dict] = None, apply: bool = False) -> str:
+    """把整棟建築的構造換成 ASHRAE 90.1-2019 基準(Appendix G)構造:外牆、屋頂、外挑樓板、地坪、外門、外窗玻璃,
+    連同範本裡的內部構造與滲風一起寫入(DB 介面換範本會帶入這些, API 只改編號不會)。U 值由材料層計算。
+    寫在建築層級, 沒有自己設定的區塊與熱區會跟著繼承; 有自己設定的會列出來, 不強改。
+
+    Args:
+        dsb_path: .dsb 的完整路徑(操作的是副本, 不改原檔)
+        climate_zone: ASHRAE 氣候區, 例如 4A(預設)、5B、3C
+        building_type: 非住宅(預設)、住宅、半空調
+        target_u: 選填, {部位: 目標 U (W/m²K)}, 部位限 外牆、屋頂、外挑樓板; 會複製基準構造、調整保溫層厚度,
+            在模型裡新增一個構造。例如 {"外牆": 0.4}
+        apply: False(預設)只產生預覽; 使用者確認後再用 True 寫入、存檔並讀回核對
+    """
+    try:
+        tmpl, glazing = dblibrary.baseline_envelope(climate_zone, building_type)
+    except (KeyError, ValueError) as e:
+        raise ValueError(str(e).strip("'\""))
+    target_u = target_u or {}
+    bad = [p for p in target_u if p not in dblibrary.TARGET_U_PARTS]
+    if bad:
+        raise ValueError(f"目標 U 只能給 {'、'.join(dblibrary.TARGET_U_PARTS)};不能給:{'、'.join(bad)}")
+    cons = dblibrary.table("Constructions")
+    want = dict(dblibrary.template_construction_attributes(tmpl))
+    want["ConstructionTemplateId"] = tmpl["Id"]
+    want["GlazingType"] = glazing["Id"]
+    copies, notes = [], {}  # copies: (基準構造編號, 要改的欄位); 新構造的編號 DB 存檔時才知道, 先用 $NEWk 代替
+    for part, attrs in dblibrary.ENVELOPE_PARTS:
+        if part not in target_u:
+            continue
+        base = want[attrs[0]]
+        try:
+            changes, note = dblibrary.adjust_to_u(cons[base], float(target_u[part]))
+        except ValueError as e:
+            raise ValueError(f"{part}:{e}")
+        copies.append((base, changes))
+        notes[part] = note
+        for a in attrs:
+            want[a] = f"$NEW{len(copies)}"
+
+    dsb = _working_copy(dsb_path)
+    main = [a for _, attrs in dblibrary.ENVELOPE_PARTS for a in attrs] + ["GlazingType"]
+    keys = sorted(want)
+    job = [("bdump", ",".join(keys)), ("dump", ",".join(main)), ("table", "Constructions", "+10000"),
+           ("table", "Glazing", "+10000")]
+    if apply:
+        job += [("copy", "Constructions", base, *[f"{k}={v}" for k, v in ch.items()]) for base, ch in copies]
+        job += [("bset", k, v) for k, v in want.items()]
+        job += [("bdump", ",".join(keys)), ("dump", ",".join(main))]
+        if copies:
+            job.append(("table", "Constructions", ",".join(f"$NEW{i + 1}" for i in range(len(copies)))))
+        job.append(("save",))
+    rows, secs = _bridge(dsb, job)
+    before = (_buildings(rows) or [{}])[0]
+    first_add = next((i for i, r in enumerate(rows) if r[0] == "added"), len(rows))
+    model_cons = _records(rows[:first_add], "Constructions")  # 寫入前模型自己的構造
+    new_ids = [r[2] for r in rows if r[0] == "added"]
+
+    lines = [f"## 套用構造{'(已寫入)' if apply else '(預覽,尚未寫入)'}:{dsb.stem}", "",
+             f"基準:**{tmpl['Name']}**(DB 構造範本 #{tmpl['Id']},{tmpl.get('Source', '')})", "",
+             "| 部位 | 目前 | U | 改成 | U | 備註 |", "|---|---|---:|---|---:|---|"]
+    for part, attrs in dblibrary.ENVELOPE_PARTS:
+        cur_name, cur_u = _cons_label(before.get(attrs[0], ""), model_cons)
+        base = tmpl[attrs[0]]
+        new_name, new_u = _cons_label(base, {})
+        if part in notes:
+            new_name, new_u = f"{new_name} -> U {target_u[part]:g}", float(target_u[part])
+        lines.append(f"| {part} | {cur_name} | {_u(cur_u)} | {new_name} | {_u(new_u)} | {notes.get(part, '')} |")
+    cur_g = (_records(rows, "Glazing").get(before.get("GlazingType", "")) or
+             dblibrary.table("Glazing").get(before.get("GlazingType", "")) or {})
+    lines.append(f"| 外窗玻璃 | {cur_g.get('Name', '#' + before.get('GlazingType', ''))} | {cur_g.get('U-Value', '')} | "
+                 f"{glazing['Name']} | {float(glazing['U-Value']):.3f} | 日射透過率 {glazing['TransSolar']} |")
+    internal = [k for k in want if k.endswith("Constr") and k not in main]
+    lines += [f"| 滲風 | {before.get('InfiltrationValue', '')} ach | | {tmpl.get('InfiltrationValue', '')} ach | | |", "",
+              f"U 值依材料層與 DB 的表面熱阻計算(W/m²K);地坪以 F 係數表示,不算 U。外窗用 2019 基準 {dblibrary.GLAZING_BRACKET} "
+              f"一檔:窗牆比 10% 以上各檔數值相同,只有 0–10% 在 CZ5–6 的日射透過率不同。"
+              f"另有隔間、樓板、天花等 {len(internal)} 項內部或次要構造照範本一起寫入。"]
+    if not apply:
+        lines.append("確認無誤後,用同樣參數加上 apply=True 寫入。")
+        return "\n".join(lines)
+
+    resolved = {k: (new_ids[int(v[4:]) - 1] if str(v).startswith("$NEW") and int(v[4:]) <= len(new_ids) else v)
+                for k, v in want.items()}
+    after_b = (_buildings(rows) or [{}])[-1]
+    after_z = (_zones(rows) or [[]])[-1]
+    problems = [f"第 {r[1]} 行:{' '.join(r[2:])}" for r in rows if r[0] in ("lineerror", "norec")]
+    if len(new_ids) != len(copies):
+        problems.append(f"應新增 {len(copies)} 個構造,實際 {len(new_ids)} 個")
+    taken = set(model_cons) | set(dblibrary.table("Constructions"))
+    for i in new_ids:
+        if not i.isdigit() or int(i) < 10000 or i in taken or new_ids.count(i) > 1:
+            problems.append(f"新構造的編號 {i} 不合理(應為 10000 以上、沒被用過);請勿使用這份模型,改用備份")
+    mismatch = [f"建築 {k}:應為 {v},讀回 {after_b.get(k, '(沒讀到)')}" for k, v in resolved.items()
+                if not _same(after_b.get(k, ""), v)]
+    overrides = [f"`{z['idf']}` {a}:{z['attrs'].get(a)}(應為 {resolved[a]})" for z in after_z for a in main
+                 if a in resolved and not _same(z["attrs"].get(a, ""), resolved[a])]
+    new_u = []
+    final_cons = _records(rows, "Constructions")
+    for i, (base, ch) in enumerate(copies):
+        rec = final_cons.get(new_ids[i]) if i < len(new_ids) else None
+        u = dblibrary.construction_u_row(rec)[0] if rec else None
+        new_u.append(f"#{new_ids[i] if i < len(new_ids) else '?'}「{ch['Name']}」:模型裡讀回算得 U {_u(u)}")
+    saved = any(r[0] == "save" and r[1] == "True" for r in rows)
+    lines += ["", f"### 寫入結果({secs} 秒)", "",
+              f"- 建築層級寫入 {len(resolved)} 項屬性" + (f",新增 {len(new_ids)} 個構造" if copies else "") +
+              f";存檔:{'成功' if saved else '**失敗**'}。",
+              f"- 讀回核對:{'全部一致' if not mismatch else f'**{len(mismatch)} 項不一致**'}。"]
+    lines += [f"  - {m}" for m in (problems + mismatch)[:20]]
+    lines += [f"- {m}" for m in new_u]
+    lines.append(f"- 熱區實際生效值:{'全部跟著建築層級' if not overrides else f'{len(overrides)} 項是熱區或區塊自己的設定,沒有改'}。")
+    lines += [f"  - {m}" for m in overrides[:20]]
+    lines.append(f"\n修改後的模型副本:`{dsb}`(用 `db_open` 打開檢查)")
+    return "\n".join(lines)
+
+
 @mcp.tool()
 def db_create_model(params: dict) -> str:
     """由建築參數建一個 DesignBuilder 模型(dsbXML), 參數格式同 tools/modeler/example.json:

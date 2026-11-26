@@ -12,6 +12,12 @@ Without DBMCP_JOB the script does nothing, so it is harmless during normal use.
 Job file lines (tab separated):
   dump<TAB>Attr1,Attr2,...            write the effective value of each attribute for every zone
   set<TAB>zone<TAB>Attr<TAB>value     zone = IDF name, zone name, or * for all zones
+  bdump<TAB>Attr1,Attr2,...           the same for the building
+  bset<TAB>Attr<TAB>value             set a building attribute
+  table<TAB>Table<TAB>id1,id2,...     write every field of these records of a model table (Constructions, Schedules, ...);
+                                      @n means the n-th record, +n every record with id n or more
+  copy<TAB>Table<TAB>id<TAB>k=v...    add a record copied from record id, with the given fields changed;
+                                      later lines can use its new id as $NEW1, $NEW2, ...
   save                                save the model
 
 Keep this file ASCII only and do not use the logical-or operator:
@@ -29,6 +35,7 @@ namespace DB.Extensibility.Scripts
     public class DbMcpBridge : ScriptBase, IScript
     {
         static bool done = false;
+        List<string> added = new List<string>();
 
         string JobPath()
         {
@@ -121,9 +128,13 @@ namespace DB.Extensibility.Scripts
                     building = ApiEnvironment.Site.Buildings[0];
                 output.Add("info\trun from " + from + "\tmodel " + ApiEnvironment.DsbFilePath);
                 int lineNo = 0;
-                foreach (string raw in File.ReadAllLines(job))
+                foreach (string line in File.ReadAllLines(job))
                 {
                     lineNo++;
+                    // $NEW1, $NEW2 ... stand for the ids of the records added by earlier copy lines
+                    string raw = line;
+                    for (int k = added.Count; k >= 1; k--)
+                        raw = raw.Replace("$NEW" + k, added[k - 1]);
                     string[] f = raw.Split('\t');
                     if (f.Length == 0)
                         continue;
@@ -134,6 +145,18 @@ namespace DB.Extensibility.Scripts
                             Dump(building, f[1].Split(','), output);
                         else if (op == "set" && f.Length > 3)
                             Set(building, f[1], f[2], f[3], output);
+                        else if (op == "bdump" && f.Length > 1)
+                            BuildingDump(building, f[1].Split(','), output);
+                        else if (op == "bset" && f.Length > 2)
+                        {
+                            string before = building.GetAttribute(f[1]);
+                            building.SetAttribute(f[1], f[2]);
+                            output.Add("bset\t" + f[1] + "\t" + before + "\t" + building.GetAttribute(f[1]));
+                        }
+                        else if (op == "table" && f.Length > 2)
+                            TableDump(f[1], f[2].Split(','), output);
+                        else if (op == "copy" && f.Length > 2)
+                            TableCopy(f, output);
                         else if (op == "save")
                             output.Add("save\t" + ApiEnvironment.DocumentFileOperations.Save());
                     }
@@ -173,6 +196,106 @@ namespace DB.Extensibility.Scripts
                 }
                 b++;
             }
+        }
+
+        static string Clean(string s)
+        {
+            if (s == null)
+                return "";
+            return s.Replace("\t", " ").Replace("\r", " ").Replace("\n", " ");
+        }
+
+        void BuildingDump(Building building, string[] attrs, List<string> output)
+        {
+            var cells = new List<string>();
+            cells.Add("building");
+            foreach (string a in attrs)
+                cells.Add(a.Trim() + "=" + Clean(building.GetAttribute(a.Trim())));
+            output.Add(string.Join("\t", cells.ToArray()));
+        }
+
+        Record FindRecord(Table table, string id)
+        {
+            foreach (Record r in table.Records)
+                if (r["Id"] == id)
+                    return r;
+            return null;
+        }
+
+        string RecordLine(string tableName, Record r)
+        {
+            var cells = new List<string>();
+            cells.Add("rec");
+            cells.Add(tableName);
+            cells.Add(r["Id"]);
+            for (int i = 0; i < r.FieldCount; i++)
+                cells.Add(r.GetKeyFromIndex(i) + "=" + Clean(r[i]));
+            return string.Join("\t", cells.ToArray());
+        }
+
+        void TableDump(string tableName, string[] ids, List<string> output)
+        {
+            Table table = ApiEnvironment.Site.GetTable(tableName);
+            if (table == null)
+            {
+                output.Add("notable\t" + tableName);
+                return;
+            }
+            output.Add("table\t" + tableName + "\t" + table.Records.Count);
+            foreach (string id in ids)
+            {
+                if (id.Trim().StartsWith("+"))
+                {
+                    // +n = every record whose id is n or more (the model's own records start at 10000)
+                    int min = int.Parse(id.Trim().Substring(1));
+                    int v;
+                    foreach (Record m in table.Records)
+                        if (int.TryParse(m["Id"], out v) && v >= min)
+                            output.Add(RecordLine(tableName, m));
+                    continue;
+                }
+                Record r;
+                if (id.Trim().StartsWith("@"))
+                    r = table.Records[int.Parse(id.Trim().Substring(1))];   // @n = the n-th record
+                else
+                    r = FindRecord(table, id.Trim());
+                if (r == null)
+                    output.Add("norec\t" + tableName + "\t" + id.Trim());
+                else
+                    output.Add(RecordLine(tableName, r));
+            }
+        }
+
+        void TableCopy(string[] f, List<string> output)
+        {
+            Table table = ApiEnvironment.Site.GetTable(f[1]);
+            Record src = FindRecord(table, f[2]);
+            if (src == null)
+            {
+                output.Add("norec\t" + f[1] + "\t" + f[2]);
+                return;
+            }
+            // Table.GetUniqueId() returned 0 in DB 2025.1, so use the largest id + 1 (the model's own range starts at 10000)
+            int max = 9999;
+            int v;
+            foreach (Record m in table.Records)
+                if (int.TryParse(m["Id"], out v) && v > max)
+                    max = v;
+            string id = (max + 1).ToString();
+            Record dst = table.AddRecord();
+            output.Add("info\tAddRecord gave id " + dst["Id"] + ", using " + id);
+            for (int i = 0; i < src.FieldCount; i++)
+                dst[src.GetKeyFromIndex(i)] = src[i];
+            dst["Id"] = id;
+            for (int i = 3; i < f.Length; i++)
+            {
+                int eq = f[i].IndexOf('=');
+                if (eq > 0)
+                    dst[f[i].Substring(0, eq)] = f[i].Substring(eq + 1);
+            }
+            added.Add(id);
+            output.Add("added\t" + f[1] + "\t" + id);
+            output.Add(RecordLine(f[1], dst));
         }
 
         void Set(Building building, string target, string attr, string value, List<string> output)
