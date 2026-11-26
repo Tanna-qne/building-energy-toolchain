@@ -33,6 +33,8 @@ site.addsitedir(str(HERE / ".venv" / "Lib" / "site-packages"))  # addsitedir 會
 sys.path[:0] = [str(HERE.parent), str(HERE.parents[1])]
 from building_report import MEASURES, num, verdict, yrs  # noqa: E402  白話措施名稱與「值不值得做」的判讀
 from eplus_summary import summarize, to_markdown  # noqa: E402
+sys.path.insert(0, str(HERE))
+import dblibrary  # noqa: E402  DB 本機範本庫(活動範本、作息、構造)
 
 from db_process import ProcessChain, Screen, find_designbuilder, is_running, kill_process  # noqa: E402
 from mcp.server.fastmcp import FastMCP  # noqa: E402
@@ -432,6 +434,152 @@ def db_calculate(dsb_path: str, kind: str, timeout_s: int = 3600) -> str:
     lines = [f"## {kind} 計算完成({secs} 秒)", "", f"結果存在模型副本 `{dsb}`;用 `db_open` 打開它,在 DB 的結果頁查看。"]
     if not closed:
         lines.append(CLOSE_NOTE)
+    return "\n".join(lines)
+
+
+# ---- 經由模型裡的 DbMcpBridge 腳本讀寫熱區屬性(DB 官方 API) ----
+
+BRIDGE_SETUP = ("這個模型還沒有裝 DbMcpBridge 腳本(或沒有啟用)。請在 DB 打開模型 → Scripts → Script Manager:"
+                "在右邊 CS-Script 資料夾新增腳本、貼上 tools/designbuilder_mcp/DbMcpBridge.cs, Enable program = Yes;"
+                "左邊點「Script」列, 右邊選這個腳本按綠色勾勾; 勾 Enable scripts; 存檔後關閉 DB。")
+ZONE_KEYS = ("ActivityTemplateId", "OccupancyValue", "HeatingDesignSetPointTemperature",
+             "ActiveCoolingDesignSetPointTemperature", "MinFreshAir", "OccupancySchedule")
+
+
+def _bridge(dsb: Path, lines, timeout_s=900):
+    """把工作清單交給模型裡的 DbMcpBridge 執行。DB 只在開始計算時載入腳本, 所以順便跑一次暖房設計(約 1 分鐘)。
+    回傳 (輸出各行的欄位清單, 秒數)。"""
+    job = dsb.parent / f"_job_{datetime.now():%Y%m%d_%H%M%S}.txt"
+    job.write_text("\n".join("\t".join(map(str, ln)) for ln in lines) + "\n", encoding="ascii")
+    os.environ["DBMCP_JOB"] = str(job)
+    try:
+        secs, _ = _run_chain(dsb, ProcessChain().switch_screen(Screen.HEATING_DESIGN).run(), timeout_s)
+    finally:
+        os.environ.pop("DBMCP_JOB", None)
+    out = Path(str(job) + ".out")
+    if not out.exists():
+        raise RuntimeError(BRIDGE_SETUP)
+    rows = [ln.split("\t") for ln in out.read_text(encoding="utf-8", errors="replace").splitlines() if ln]
+    err = [r for r in rows if r[0] == "error"]
+    if err:
+        raise RuntimeError("DbMcpBridge 執行失敗:" + " ".join(err[0][1:]))
+    return rows, secs
+
+
+def _zones(rows):
+    """dump 的輸出 → [{block, zone, idf, area, attrs}];同一份輸出裡有多次 dump 時取最後一次。"""
+    dumps, cur = [], None
+    for r in rows:
+        if r[0] == "zone":
+            if cur is None:
+                cur = []
+                dumps.append(cur)
+            cur.append({"block": r[2], "zone": r[3], "idf": r[4], "area": float(r[5]),
+                        "attrs": dict(c.split("=", 1) for c in r[6:] if "=" in c)})
+        else:
+            cur = None
+    return dumps
+
+
+def _resolve(zones, selector):
+    """熱區選擇器: IDF 名稱、區塊名稱(該區塊所有熱區)、或 * (全部)。"""
+    if selector == "*":
+        return zones
+    s = selector.strip().lower()
+    hit = [z for z in zones if z["idf"].lower() == s]
+    return hit or [z for z in zones if z["block"].strip().lower() == s]
+
+
+def _fmt_zone_table(zones):
+    lines = ["| 區塊 | 熱區 | IDF 名稱 | 面積 m² | 目前用途 | 人員 人/m² | 暖 / 冷設定 °C |", "|---|---|---|---:|---|---:|---|"]
+    for z in zones:
+        a = z["attrs"]
+        lines.append(f"| {z['block']} | {z['zone']} | `{z['idf']}` | {z['area']:,.1f} | "
+                     f"{dblibrary.activity_label(a.get('ActivityTemplateId', ''))} | {a.get('OccupancyValue', '')} | "
+                     f"{a.get('HeatingDesignSetPointTemperature', '')} / {a.get('ActiveCoolingDesignSetPointTemperature', '')} |")
+    return lines
+
+
+@mcp.tool()
+def db_zones(dsb_path: str) -> str:
+    """列出模型(副本)的所有熱區:所屬區塊、IDF 名稱、面積、目前生效的用途、人員密度、冷暖設定。
+    讀的是 DB 實際生效值(含從上層繼承的)。需要模型裡裝有 DbMcpBridge 腳本; 會在背景跑一次暖房設計(約 1 分鐘)。"""
+    dsb = _working_copy(dsb_path)
+    rows, secs = _bridge(dsb, [("dump", ",".join(ZONE_KEYS))])
+    zones = (_zones(rows) or [[]])[-1]
+    return "\n".join([f"## {dsb.stem}:{len(zones)} 個熱區({secs} 秒)", ""] + _fmt_zone_table(zones) +
+                     ["", "要改用途,呼叫 `db_assign_activity`,熱區用 IDF 名稱或區塊名稱指定。",
+                      f"可用的用途:{'、'.join(dblibrary.SPACE_TYPES)}"])
+
+
+def _same(a, b):
+    try:
+        return abs(float(a) - float(b)) <= 1e-6 * max(1.0, abs(float(b)))
+    except ValueError:
+        return str(a).strip() == str(b).strip()
+
+
+@mcp.tool()
+def db_assign_activity(dsb_path: str, assignments: dict, apply: bool = False) -> str:
+    """把熱區換成指定用途: 寫入 DB 活動範本編號, 並逐項寫入該範本的人員、設備、作息、設定溫度、新風等數值
+    (DB 介面換範本會自動帶入這些值, API 不會)。數值全部取自本機 DB 範本庫, 不由 AI 決定。
+
+    Args:
+        dsb_path: .dsb 的完整路徑(操作的是副本, 不改原檔)
+        assignments: {熱區選擇器: 中文用途}; 選擇器是 IDF 名稱、區塊名稱或 "*"; 用途見 db_zones 輸出的清單,
+            例如 {"FIRSTFLOORBLOCK:ZONE1": "廁所", "Ground floor block": "辦公"}
+        apply: False(預設)只產生預覽, 不改模型; 使用者確認後再用 True 寫入、存檔並讀回核對
+    """
+    dsb = _working_copy(dsb_path)
+    try:
+        plan_uses = {sel: dblibrary.resolve_space(use) for sel, use in assignments.items()}
+    except KeyError as e:
+        raise ValueError(str(e).strip("'\""))
+    rows, secs = _bridge(dsb, [("dump", ",".join(ZONE_KEYS))])
+    zones = (_zones(rows) or [[]])[-1]
+    targets = {}
+    for sel, tpl in plan_uses.items():
+        hit = _resolve(zones, sel)
+        if not hit:
+            raise ValueError(f"找不到熱區或區塊「{sel}」;可用 db_zones 查看名稱")
+        for z in hit:
+            targets[z["idf"]] = (z, tpl)
+    lines = [f"## 套用用途{'(已寫入)' if apply else '(預覽,尚未寫入)'}:{dsb.stem}", "",
+             "| 熱區 | 目前用途 | 改成 | 人員 人/m² | 暖 / 冷設定 °C | 新風 L/s·人 | 在室作息 |", "|---|---|---|---|---|---|---|"]
+    for idf, (z, tpl) in targets.items():
+        a, s = z["attrs"], dblibrary.activity_summary(tpl)
+        sch = s["occupancy_hours"]
+        lines.append(f"| `{idf}` | {dblibrary.activity_label(a.get('ActivityTemplateId', ''))} | "
+                     f"{dblibrary.activity_label(tpl['Id'])} | {a.get('OccupancyValue', '')} → {tpl.get('OccupancyValue', '')} | "
+                     f"{a.get('HeatingDesignSetPointTemperature', '')}/{a.get('ActiveCoolingDesignSetPointTemperature', '')} → "
+                     f"{tpl.get('HeatingDesignSetPointTemperature', '')}/{tpl.get('ActiveCoolingDesignSetPointTemperature', '')} | "
+                     f"{a.get('MinFreshAir', '')} → {tpl.get('MinFreshAir', '')} | "
+                     f"`{dblibrary.spark(sch['平日']) if sch else '—'}` |")
+    lines += ["", f"數值來源:本機 DB 範本庫(活動範本編號見「改成」欄),每個熱區寫入範本編號加 "
+                  f"{len(dblibrary.ACTIVITY_ATTRIBUTES)} 項以內的屬性(範本裡空白的不寫)。"]
+    if not apply:
+        lines.append("確認無誤後,用同樣參數加上 apply=True 寫入。")
+        return "\n".join(lines)
+
+    job, want = [], {}
+    for idf, (z, tpl) in targets.items():
+        attrs = [("ActivityTemplateId", tpl["Id"])] + dblibrary.activity_attributes(tpl)
+        want[idf] = dict(attrs)
+        job += [("set", idf, k, v) for k, v in attrs]
+    keys = sorted({k for w in want.values() for k in w})
+    job += [("dump", ",".join(keys)), ("save",)]
+    rows, secs2 = _bridge(dsb, job)
+    after = {z["idf"]: z["attrs"] for z in (_zones(rows) or [[]])[-1]}
+    problems = [f"`{r[1]}` {r[2]}:這個熱區沒有此屬性" if r[0] == "nozone" else f"第 {r[1]} 行:{' '.join(r[2:])}"
+                for r in rows if r[0] in ("nozone", "lineerror")]
+    mismatch = [f"`{idf}` {k}:應為 {v},讀回 {after.get(idf, {}).get(k, '(沒讀到)')}"
+                for idf, w in want.items() for k, v in w.items() if not _same(after.get(idf, {}).get(k, ""), v)]
+    saved = any(r[0] == "save" and r[1] == "True" for r in rows)
+    lines += ["", f"### 寫入結果({secs + secs2} 秒)", "",
+              f"- 寫入 {sum(len(w) for w in want.values())} 項屬性,{len(targets)} 個熱區;存檔:{'成功' if saved else '**失敗**'}。",
+              f"- 讀回核對:{'全部一致' if not mismatch else f'**{len(mismatch)} 項不一致**'}。"]
+    lines += [f"  - {m}" for m in (problems + mismatch)[:20]]
+    lines.append(f"\n修改後的模型副本:`{dsb}`(用 `db_open` 打開檢查)")
     return "\n".join(lines)
 
 

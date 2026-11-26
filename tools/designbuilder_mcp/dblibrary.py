@@ -96,6 +96,37 @@ def resolve_space(label):
     return row
 
 
+# 換活動範本時要一起寫入熱區的屬性(DB 介面換範本會自動載入這些, API 只改範本編號不會)。
+# 名稱同時是範本庫欄位名與熱區屬性名; 只列影響模擬的項目, 不含名稱、來源、各國規範專用欄位。
+ACTIVITY_ATTRIBUTES = (
+    "OccupancyValue", "OccupancySchedule", "MetabolicRateId", "MetabolicFactor", "OccupancyLatentFraction",
+    "OccupancyDaysWeek", "UseHolidays",
+    "HeatingDesignSetPointTemperature", "ActiveCoolingDesignSetPointTemperature",
+    "HeatingSetBackSetPointTemperature", "CoolingSetBackSetPointTemperature",
+    "NatVentSetPointTemperature", "MechVentSetPointTemperature",
+    "MinFreshAir", "MinFreshAirPerArea", "TargetIlluminance1", "FluorescentLightingSchedule",
+    "ComputersOn", "ComputersValue", "ComputersSchedule", "EquipmentOn", "EquipmentValue", "EquipmentSchedule",
+    "MiscellaneousOn", "MiscellaneousValue", "MiscellaneousSchedule", "CateringOn", "CateringValue", "CateringSchedule",
+    "ProcessOn", "ProcessValue", "ProcessSchedule", "DHWOn", "DHWValue", "DHWSchedule", "HUM_MIN", "HUM_MAX",
+)
+
+
+def activity_attributes(row):
+    """範本 row → [(屬性, 值)]; 範本裡空白的欄位不寫(沿用熱區原值)。"""
+    return [(k, row[k]) for k in ACTIVITY_ATTRIBUTES if row.get(k, "") != ""]
+
+
+def activity_label(template_id):
+    """範本編號 → 「中文用途(範本名)」; 對照表外的範本只回傳範本名。"""
+    row = table("ActivityTemplates").get(str(template_id))
+    if not row:
+        return f"#{template_id}(範本庫裡找不到)"
+    for label, name in SPACE_TYPES.items():
+        if name == row["Name"]:
+            return f"{label}({row['Name']})"
+    return row["Name"]
+
+
 def _hours_from_compact(text, day):
     """Schedule:Compact(DB 用 "|^" 分行)裡某一類日子的 24 個逐時值。day: Weekdays / Saturday / Sunday。"""
     lines = [x.strip().rstrip(",;") for x in text.replace("|^", "\n").splitlines() if x.strip()]

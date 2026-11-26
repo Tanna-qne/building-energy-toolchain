@@ -120,18 +120,28 @@ namespace DB.Extensibility.Scripts
                 if (building == null)
                     building = ApiEnvironment.Site.Buildings[0];
                 output.Add("info\trun from " + from + "\tmodel " + ApiEnvironment.DsbFilePath);
+                int lineNo = 0;
                 foreach (string raw in File.ReadAllLines(job))
                 {
+                    lineNo++;
                     string[] f = raw.Split('\t');
                     if (f.Length == 0)
                         continue;
                     string op = f[0].Trim();
-                    if (op == "dump" && f.Length > 1)
-                        Dump(building, f[1].Split(','), output);
-                    else if (op == "set" && f.Length > 3)
-                        Set(building, f[1], f[2], f[3], output);
-                    else if (op == "save")
-                        output.Add("save\t" + ApiEnvironment.DocumentFileOperations.Save());
+                    try
+                    {
+                        if (op == "dump" && f.Length > 1)
+                            Dump(building, f[1].Split(','), output);
+                        else if (op == "set" && f.Length > 3)
+                            Set(building, f[1], f[2], f[3], output);
+                        else if (op == "save")
+                            output.Add("save\t" + ApiEnvironment.DocumentFileOperations.Save());
+                    }
+                    catch (Exception e)
+                    {
+                        // one bad line (for example an attribute this zone does not have) must not stop the job
+                        output.Add("lineerror\t" + lineNo + "\t" + e.GetType().Name + "\t" + e.Message.Replace("\r", " ").Replace("\n", " "));
+                    }
                 }
                 output.Add("done");
             }
@@ -181,12 +191,12 @@ namespace DB.Extensibility.Scripts
                         continue;
                     string before = zone.GetAttribute(attr);
                     zone.SetAttribute(attr, value);
-                    output.Add("set\t" + zone.IdfName + "\t" + attr + "\t" + before + " -> " + zone.GetAttribute(attr));
+                    output.Add("set\t" + zone.IdfName + "\t" + attr + "\t" + before + "\t" + zone.GetAttribute(attr));
                     n++;
                 }
             }
             if (n == 0)
-                output.Add("set\t" + target + "\t" + attr + "\tno matching zone");
+                output.Add("nozone\t" + target + "\t" + attr);
         }
     }
 }
