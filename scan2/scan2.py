@@ -408,7 +408,8 @@ def scan_models(client, models, models_dir: Path):
         equip_path = apply(client, "modify_electric_equipment", {"idf_path": str(src), "modifications": emods},
                            models_dir / f"{name}__equip.idf") if emods else None
         equip = run(client, equip_path) if equip_path else failed(
-            "模型沒有一般用電設備物件(ElectricEquipment),這項不適用" if not emods else "設備修改失敗")
+            "模型沒有用電設備物件(ElectricEquipment,或燃料是電的 OtherEquipment),這項不適用"
+            if not emods else "設備修改失敗")
 
         # 換構造 / 換設備的措施: MCP 沒有工具, 由 build_idf.py 另建的變體模型直接模擬(見 db_import.variants)
         var_results = []

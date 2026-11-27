@@ -298,37 +298,90 @@ index ce3a627..1a19791 100644
              },
              "system": {
 diff --git a/energyplus-mcp-server/energyplus_mcp_server/utils/electric_equipment_utils.py b/energyplus-mcp-server/energyplus_mcp_server/utils/electric_equipment_utils.py
-index cc3be19..ce0db1e 100644
+index cc3be19..34428b3 100644
 --- a/energyplus-mcp-server/energyplus_mcp_server/utils/electric_equipment_utils.py
 +++ b/energyplus-mcp-server/energyplus_mcp_server/utils/electric_equipment_utils.py
-@@ -17,6 +17,11 @@ from eppy.modeleditor import IDF
+@@ -17,6 +17,32 @@ from eppy.modeleditor import IDF
  logger = logging.getLogger(__name__)
  
  
 +
++def _field(obj, *names):
++    """First of the given field names that this object has (names differ between object types and E+ versions)."""
++    return next((n for n in names if n in obj.fieldnames), names[0])
++
++
 +def _per_area_field(obj):
-+    """Watts per floor area: E+ 23.1 (DesignBuilder's engine) names it Watts_per_Zone_Floor_Area."""
-+    return "Watts_per_Floor_Area" if "Watts_per_Floor_Area" in obj.fieldnames else "Watts_per_Zone_Floor_Area"
++    """Watts per floor area: E+ 23.1 (DesignBuilder's engine) names it Watts_per_Zone_Floor_Area;
++    OtherEquipment calls it Power_per_(Zone_)Floor_Area."""
++    return _field(obj, "Watts_per_Floor_Area", "Watts_per_Zone_Floor_Area",
++                  "Power_per_Floor_Area", "Power_per_Zone_Floor_Area")
++
++
++def _per_person_field(obj):
++    return _field(obj, "Watts_per_Person", "Power_per_Person")
++
++
++def _equipment_objects(idf):
++    """ElectricEquipment plus electric OtherEquipment. DesignBuilder writes plug loads as
++    OtherEquipment with Fuel_Type = Electricity; other fuels (and heat-only gains) are left out."""
++    objs = list(idf.idfobjects.get("ElectricEquipment", []))
++    for o in idf.idfobjects.get("OtherEquipment", []):
++        if str(getattr(o, "Fuel_Type", "")).strip().lower() == "electricity":
++            objs.append(o)
++    return objs
 +
  class ElectricEquipmentManager:
      """Manager for EnergyPlus ElectricEquipment objects"""
      
-@@ -80,7 +85,7 @@ class ElectricEquipmentManager:
+@@ -56,8 +82,8 @@ class ElectricEquipmentManager:
+         """
+         try:
+             idf = IDF(idf_path)
+-            equipment_objects = idf.idfobjects.get("ElectricEquipment", [])
+-            
++            equipment_objects = _equipment_objects(idf)
++
+             result = {
+                 "success": True,
+                 "file_path": idf_path,
+@@ -76,12 +102,13 @@ class ElectricEquipmentManager:
+             for equipment_obj in equipment_objects:
+                 equipment_info = {
+                     "name": getattr(equipment_obj, 'Name', 'Unknown'),
++                    "object_type": equipment_obj.key,
+                     "zone_or_zonelist_or_space_or_spacelist_name": getattr(equipment_obj, 'Zone_or_ZoneList_or_Space_or_SpaceList_Name', 'Unknown'),
                      "schedule_name": getattr(equipment_obj, 'Schedule_Name', 'Unknown'),
                      "design_level_calculation_method": getattr(equipment_obj, 'Design_Level_Calculation_Method', 'Unknown'),
                      "design_level": getattr(equipment_obj, 'Design_Level', ''),
 -                    "watts_per_floor_area": getattr(equipment_obj, 'Watts_per_Floor_Area', ''),
+-                    "watts_per_person": getattr(equipment_obj, 'Watts_per_Person', ''),
 +                    "watts_per_floor_area": getattr(equipment_obj, _per_area_field(equipment_obj), ''),
-                     "watts_per_person": getattr(equipment_obj, 'Watts_per_Person', ''),
++                    "watts_per_person": getattr(equipment_obj, _per_person_field(equipment_obj), ''),
                      "fraction_latent": getattr(equipment_obj, 'Fraction_Latent', ''),
                      "fraction_radiant": getattr(equipment_obj, 'Fraction_Radiant', ''),
-@@ -307,7 +312,8 @@ class ElectricEquipmentManager:
+                     "fraction_lost": getattr(equipment_obj, 'Fraction_Lost', ''),
+@@ -168,8 +195,8 @@ class ElectricEquipmentManager:
+         """
+         try:
+             idf = IDF(idf_path)
+-            equipment_objects = idf.idfobjects.get("ElectricEquipment", [])
+-            
++            equipment_objects = _equipment_objects(idf)
++
+             result = {
+                 "success": True,
+                 "input_file": idf_path,
+@@ -306,8 +333,10 @@ class ElectricEquipmentManager:
+                         )
                          continue
                  
-                 old_value = getattr(equipment_obj, field_name, "")
+-                old_value = getattr(equipment_obj, field_name, "")
 -                setattr(equipment_obj, field_name, new_value)
-+                setattr(equipment_obj,
-+                        _per_area_field(equipment_obj) if field_name == "Watts_per_Floor_Area" else field_name, new_value)
++                actual = {"Watts_per_Floor_Area": _per_area_field(equipment_obj),
++                          "Watts_per_Person": _per_person_field(equipment_obj)}.get(field_name, field_name)
++                old_value = getattr(equipment_obj, actual, "")
++                setattr(equipment_obj, actual, new_value)
                  
                  result["modifications_applied"].append({
                      "object_name": equipment_name,
