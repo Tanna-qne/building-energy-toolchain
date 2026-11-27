@@ -10,7 +10,7 @@ The user builds and edits models in DesignBuilder. An AI assistant (through the 
 
 | Component | File | Role |
 |---|---|---|
-| DesignBuilder MCP server | [tools/designbuilder_mcp/server.py](../tools/designbuilder_mcp/server.py) | Fifteen tools that drive DesignBuilder through the official [db-process](https://github.com/DesignBuilderSoftware/db-process) command line (`/process=`) |
+| DesignBuilder MCP server | [tools/designbuilder_mcp/server.py](../tools/designbuilder_mcp/server.py) | Sixteen tools that drive DesignBuilder through the official [db-process](https://github.com/DesignBuilderSoftware/db-process) command line (`/process=`) |
 | Command-line runner | [tools/designbuilder_mcp/cli.py](../tools/designbuilder_mcp/cli.py) | The same chain without an assistant: simulate a `.dsb`, then run the measures report |
 | Desktop app | [tools/app/app.py](../tools/app/app.py) | Pick a `.dsb` / `.idf`, or enter a few building parameters, choose weather, run, open the report |
 | Engine adapter | [tools/dbengine/](../tools/dbengine/) | Makes DesignBuilder's bundled EnergyPlus usable from the command line (see below) |
@@ -26,6 +26,7 @@ All operations work on a copy of the user's model in `db_models/dbmcp/<model>/`;
 | `db_status` | Whether DesignBuilder is running, the executable path, licence expiry date | No | Yes (2026-11-23) |
 | `db_inspect` | Exports the model to dsbXML (`/process=` export) and lists buildings, blocks, zones and building-level attributes | First call only (then cached) | Yes (2026-11-13) |
 | `db_simulate` | Optionally changes building-level attributes, then runs the annual EnergyPlus simulation inside DesignBuilder and collects `in.idf`, `eplusout.err`, `eplustbl.htm`, `eplusout.eso` from `%LOCALAPPDATA%\DesignBuilder\EnergyPlus` | Yes | Yes (2026-11-13, 2026-11-23) |
+| `db_results` | Extracts hourly, daily or monthly results from a `db_simulate` output folder into CSV: building meters (electricity, lighting, equipment, heating, cooling, gas), outdoor temperature, and per-zone air and operative temperature, humidity and ideal-loads heating / cooling. It only reads what the simulation wrote; missing variables are reported with the frequencies that do exist | No | Yes (2026-11-27) |
 | `db_measures_report` / `db_report_status` | Runs eight retrofit measures on the exported IDF in the background and reports savings and payback | No | Yes (2026-11-13, 2026-11-23) |
 | `db_calculate` | Heating design, cooling design, daylighting, annual daylighting or CFD through `/process=` | Yes | Not yet |
 | `db_create_model` | Builds a dsbXML model from basic parameters (via [honeybee-designbuilder](https://github.com/ladybug-tools/honeybee-designbuilder)) for import into DesignBuilder | No | Not recorded |
@@ -54,6 +55,8 @@ The schedule and construction tools take their values only from DesignBuilder's 
 - `SaveAs` writes an uncompressed `.skh` file (and does not add a path separator between the folder and the name). The tool packs it into a `.dsb`, which is a zip archive holding `~name.skh`.
 
 The ASHRAE 2019 baseline ground floor is an F-factor construction, and DesignBuilder refuses to calculate a zone whose ground floor has no exposed perimeter (a core zone): "has zero exposed perimeter. Replace the F-factor construction with a layered construction". `db_assign_construction` therefore adds a layered copy of the same construction and, through the bridge, gives it only to zones whose ground floor has no exposed perimeter (`Adjacency.ExposedWallGroundFloorLength`). Other ground floor zones keep the F-factor construction. Tested on a two-storey U-shaped model with 18 zones: one core zone was switched, and the annual simulation ran with eight F-factor ground floors.
+
+By default DesignBuilder requests only monthly and run period output. `db_simulate(hourly=True)` first sets the site attribute `HourlyOutput` through the bridge and saves the model (about one minute), then simulates. Setting the attribute in the `BeforeEnergyIdfGeneration` hook of the simulation itself only takes effect from the next run: DesignBuilder has already chosen the output variables by then. On every run with the bridge it also saves `zones.json`, which maps zone handles to zone names: with an evaluation licence the IDF uses numeric names (zone handles) regardless of `IDFNameType`. Meters are written to `eplusout.mtr`, which `db_simulate` now collects as well. `db_results` checks each meter by comparing the sum of its hourly, daily or monthly values with the run period value.
 
 Zones are named `F03 North` / `F03 Core`, and blocks are named by floor (`F03`). The IDF names only appear after DesignBuilder's first calculation, so the tools also accept zone names.
 

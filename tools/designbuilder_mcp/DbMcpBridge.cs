@@ -19,7 +19,9 @@ Job file lines (tab separated):
   copy<TAB>Table<TAB>id<TAB>k=v...    add a record copied from record id, with the given fields changed;
                                       later lines can use its new id as $NEW1, $NEW2, ...
   importxml<TAB>path                  import a dsbXML file (Site.ImportXMLFile); later lines work on the last building
-  groundfix<TAB>id                    zones whose ground floor has no exposed perimeter get ground floor construction id
+  sdump<TAB>Attr1,... / sset<TAB>Attr<TAB>value   read / set site attributes (HourlyOutput, ...)
+  handles                             zone handle, block, zone name and IDF name of every zone
+  groundfix<TAB>id                   zones whose ground floor has no exposed perimeter get ground floor construction id
   saveas<TAB>name<TAB>folder          save the model as folder\name.dsb
   quit                                end DesignBuilder once the job is written (after importxml)
   save                                save the model
@@ -180,6 +182,27 @@ namespace DB.Extensibility.Scripts
                             TableCopy(f, output);
                         else if (op == "importxml" && f.Length > 1)
                             building = ImportXml(building, f[1], output);
+                        else if (op == "sset" && f.Length > 2)
+                        {
+                            string before = ApiEnvironment.Site.GetAttribute(f[1]);
+                            ApiEnvironment.Site.SetAttribute(f[1], f[2]);
+                            output.Add("sset\t" + f[1] + "\t" + before + "\t" + ApiEnvironment.Site.GetAttribute(f[1]));
+                        }
+                        else if (op == "sdump" && f.Length > 1)
+                        {
+                            var cells = new List<string>();
+                            cells.Add("site");
+                            foreach (string a in f[1].Split(','))
+                                cells.Add(a.Trim() + "=" + Clean(ApiEnvironment.Site.GetAttribute(a.Trim())));
+                            output.Add(string.Join("\t", cells.ToArray()));
+                        }
+                        else if (op == "handles")
+                        {
+                            // with numeric IDF names (evaluation licence, IDFNameType=2) EnergyPlus zones are named by handle
+                            foreach (BuildingBlock block in building.BuildingBlocks)
+                                foreach (Zone zone in block.Zones)
+                                    output.Add("handle\t" + zone.Handle + "\t" + block.GetAttribute("Title") + "\t" + zone.Name + "\t" + zone.IdfName);
+                        }
                         else if (op == "groundfix" && f.Length > 1)
                             GroundFix(building, f[1], output);
                         else if (op == "saveas" && f.Length > 2)

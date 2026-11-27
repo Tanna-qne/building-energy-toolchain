@@ -36,6 +36,7 @@ from building_report import MEASURES, num, verdict, yrs  # noqa: E402  白話措
 from eplus_summary import summarize, to_markdown  # noqa: E402
 sys.path.insert(0, str(HERE))
 import dblibrary  # noqa: E402  DB 本機範本庫(活動範本、作息、構造)
+import results  # noqa: E402  讀 eplusout.eso / .mtr 的逐時、逐熱區結果
 
 from db_process import ProcessChain, Screen, find_designbuilder, is_running, kill_process  # noqa: E402
 from mcp.server.fastmcp import FastMCP  # noqa: E402
@@ -49,7 +50,7 @@ MAIN_PY = Path(os.environ.get("REPORT_PYTHON") or
 # 參數 → dsbXML 用建模環境: 官方 26.2 配的 .venv, 或只用 DesignBuilder 引擎時的 .venv231(安裝.bat 建的)
 MODELER_PY = next((p for p in (WS / "tools" / "modeler" / v / "Scripts" / "python.exe" for v in (".venv", ".venv231"))
                    if p.exists()), WS / "tools" / "modeler" / ".venv" / "Scripts" / "python.exe")
-EP_OUTPUTS = ("in.idf", "eplusout.err", "eplustbl.htm", "eplusout.eso")
+EP_OUTPUTS = ("in.idf", "eplusout.err", "eplustbl.htm", "eplusout.eso", "eplusout.mtr")
 
 # 常看的建築層屬性(ChangeAttributeValue 用同一組名稱)
 KEY_ATTRIBUTES = ("Title", "ConstructionTemplateId", "GlazingTemplateId", "ActivityTemplateId", "HVACTemplateId",
@@ -282,7 +283,7 @@ def db_inspect(dsb_path: str, attribute_filter: str = "") -> str:
 
 @mcp.tool()
 def db_simulate(dsb_path: str, attributes: Optional[dict] = None, start_date: str = "", end_date: str = "",
-                timeout_s: int = 1800) -> str:
+                hourly: bool = False, timeout_s: int = 1800) -> str:
     """用 DesignBuilder 本身跑 EnergyPlus 年度模擬(在模型副本上, 不改原檔), 收集 in.idf / eplustbl.htm 等結果。
 
     Args:
@@ -290,10 +291,105 @@ def db_simulate(dsb_path: str, attributes: Optional[dict] = None, start_date: st
         attributes: 模擬前要改的建築層屬性, 例如 {"InfiltrationValue": 0.35}; 名稱用 db_inspect 查。
             數值用 SI 單位; 布林用 1/0; 資料表選項用數字 Id。
         start_date / end_date: "日/月", 例如 "1/1"、"31/12"; 留空用模型原本的設定
+        hourly: True 時開啟 DB 的逐時輸出(要逐時結果給 db_results 用時才開; 輸出檔會大很多)。需要模型裡有 DbMcpBridge
         timeout_s: 最多等幾秒
-    Returns: 輸出資料夾、EnergyPlus 是否成功、總能耗與 EUI。要算節能措施與回本, 接著呼叫 db_measures_report。
+    Returns: 輸出資料夾、EnergyPlus 是否成功、總能耗與 EUI。要算節能措施與回本, 接著呼叫 db_measures_report;
+        要逐時、逐熱區結果, 呼叫 db_results。
     """
     dsb = _working_copy(dsb_path)
+    # 有 DbMcpBridge 的模型: 在 DB 產生 IDF 前記下熱區代號與名稱的對照(評估版授權的 IDF 用數字代號當熱區名稱),
+    # 需要時也開啟逐時輸出。這個設定是 Site 屬性, DB 跑完存檔後會留在模型副本裡
+    job = None
+    bridge = _has_bridge(dsb)
+    if hourly and bridge:
+        # DB 在 BeforeEnergyIdfGeneration 之前就決定了輸出變數, 在模擬裡才設定要到下一次才生效(實測);
+        # 所以先用一次短作業開啟並存檔(約 1 分鐘)
+        _bridge(dsb, [("sset", "HourlyOutput", "1"), ("save",)])
+    if bridge:
+        job = _write_job(dsb, [("sdump", OUTPUT_KEYS), ("handles",)])
+        os.environ["DBMCP_JOB"] = str(job)
+    try:
+        report = _simulate(dsb_path, dsb, attributes, start_date, end_date, timeout_s)
+    finally:
+        os.environ.pop("DBMCP_JOB", None)
+    out = max(dsb.parent.glob("sim_*"), key=lambda p: p.stat().st_mtime)
+    notes = []
+    rows = _job_rows(job) if job else None
+    if rows:
+        zmap = {r[1]: {"block": r[2], "zone": r[3], "idf": r[4]} for r in rows if r[0] == "handle"}
+        (out / "zones.json").write_text(json.dumps(zmap, ensure_ascii=False, indent=1), encoding="utf-8")
+        site = next((dict(c.split("=", 1) for c in r[1:]) for r in rows if r[0] == "site"), {})
+        on = [k.replace("Output", "") for k in OUTPUT_KEYS.split(",") if site.get(k) == "1"]
+        notes.append(f"輸出頻率:{'、'.join(on) or '只有全年'}" + ("(這次開啟了逐時輸出,模型副本會保留這個設定)" if hourly else ""))
+        if hourly and site.get("HourlyOutput") != "1":
+            notes.append("**逐時輸出沒有開成功**,請在 DB 的模擬選項手動勾選 Hourly。")
+    elif hourly:
+        notes.append("**沒有開到逐時輸出**:模型裡沒有 DbMcpBridge(或沒啟用),這次只有 DB 原本設定的輸出頻率。")
+    if notes:
+        report += "\n\n" + "\n".join(notes) + "\n要逐時或逐熱區的結果,呼叫 `db_results`。"
+    return report
+
+
+OUTPUT_KEYS = "HourlyOutput,DailyOutput,MonthlyOutput"
+
+
+@mcp.tool()
+def db_results(output_dir: str, items: list, freq: str = "hourly", zones: Optional[list] = None) -> str:
+    """從 db_simulate 的輸出資料夾取出逐時 / 逐日 / 逐月結果, 存成 CSV(Excel 可直接打開)。
+    只取模擬已輸出的資料; 沒輸出的項目會列出來並說明怎麼開, 不推算。
+
+    Args:
+        output_dir: db_simulate 回傳的輸出資料夾(sim_...)
+        items: 要的項目, 從這些選: 總用電、照明用電、設備用電、供暖量、供冷量、天然氣、室外溫度(建築整體),
+            室溫、操作溫度、相對濕度、供暖負荷、供冷負荷(每個熱區一欄)
+        freq: hourly(預設)/ daily / monthly
+        zones: 熱區類項目只取這些熱區或區塊(例如 ["F01", "F02 Core"]); 不給或 "*" 為全部
+    """
+    sim = Path(output_dir)
+    if not (sim / "eplusout.eso").exists():
+        raise ValueError(f"{sim} 裡沒有 eplusout.eso;請給 db_simulate 回傳的輸出資料夾")
+    zmap_file = sim / "zones.json"
+    zmap = json.loads(zmap_file.read_text(encoding="utf-8")) if zmap_file.exists() else {}
+    cols, time_cols, rows, missing, checks, title = results.extract(sim, items, freq, zones, zmap)
+    lines = [f"## 模擬結果({freq}):{sim.name}", ""]
+    if cols:
+        out = sim / f"results_{freq}_{datetime.now():%Y%m%d_%H%M%S}.csv"
+        with open(out, "w", newline="", encoding="utf-8-sig") as f:  # 有 BOM, Excel 打開中文不會亂碼
+            w = csv.writer(f)
+            w.writerow(time_cols + cols)
+            w.writerows(rows)
+        lines += [f"- 存成 `{out}`:{len(rows)} 列 × {len(cols)} 欄(模擬期間 {title})。", "",
+                  "| 欄 | 最小 | 平均 | 最大 |", "|---|---:|---:|---:|"]
+        for j, c in enumerate(cols[:30]):
+            vals = [r[len(time_cols) + j] for r in rows if r[len(time_cols) + j] is not None]
+            if vals:
+                lines.append(f"| {c} | {min(vals):,.2f} | {sum(vals) / len(vals):,.2f} | {max(vals):,.2f} |")
+        if len(cols) > 30:
+            lines.append(f"(只列出前 30 欄;共 {len(cols)} 欄,完整資料在 CSV)")
+    if checks:
+        lines += ["", "核對(各時段加總 vs EnergyPlus 的全年值):"]
+        for c, s, total in checks:
+            ok = total is not None and abs(s - total) <= 1e-6 * max(1.0, abs(total))
+            lines.append(f"- {c}:加總 {s:,.1f},全年 {total:,.1f}{'(一致)' if ok else '(**不一致**)'}")
+    if missing:
+        lines += ["", "**沒有的項目**(模擬沒有輸出,不會推算):"]
+        for item, have in missing:
+            lines.append(f"- {item}:" + ("只有 " + "、".join(have) + " 的輸出" if have and have[0] != "沒有符合的熱區"
+                                          else "沒有符合的熱區" if have else "這次模擬完全沒有輸出這個量"))
+        if any(have and have[0] != "沒有符合的熱區" for _, have in missing) and freq == "hourly":
+            lines.append("要逐時資料,請用 `db_simulate(..., hourly=True)` 重跑(需要模型裡有 DbMcpBridge)。")
+    if any(results.ITEMS[i][0] == "zone" for i in items) and not zmap:
+        lines.append("\n這個資料夾沒有 zones.json(熱區代號對照),熱區欄用 EnergyPlus 的數字代號;"
+                     "用新版 `db_simulate` 重跑會自動記下熱區名稱。")
+    return "\n".join(lines)
+
+
+def _has_bridge(dsb: Path):
+    with zipfile.ZipFile(dsb) as z:
+        return BRIDGE_MARKER in z.read(z.infolist()[0])
+
+
+def _simulate(dsb_path, dsb: Path, attributes, start_date, end_date, timeout_s):
     chain = ProcessChain()
     for label, d in (("start", start_date), ("end", end_date)):
         if d:
@@ -447,12 +543,25 @@ ZONE_KEYS = ("ActivityTemplateId", "OccupancyValue", "HeatingDesignSetPointTempe
              "ActiveCoolingDesignSetPointTemperature", "MinFreshAir", "OccupancySchedule")
 
 
+def _write_job(dsb: Path, lines):
+    job = dsb.parent / f"_job_{datetime.now():%Y%m%d_%H%M%S}.txt"
+    job.write_text("\n".join("\t".join(map(str, ln)) for ln in lines) + "\n", encoding="ascii")
+    return job
+
+
+def _job_rows(job: Path):
+    """DbMcpBridge 的輸出各行(欄位清單); 腳本沒執行(沒有 .out)回傳 None。"""
+    out = Path(str(job) + ".out")
+    if not out.exists():
+        return None
+    return [ln.split("\t") for ln in out.read_text(encoding="utf-8", errors="replace").splitlines() if ln]
+
+
 def _bridge(dsb: Path, lines, timeout_s=900, after=False):
     """把工作清單交給模型裡的 DbMcpBridge 執行。DB 只在開始計算時載入腳本, 所以順便跑一次暖房設計(約 1 分鐘)。
     after=True 時等暖房設計算完才執行(匯入模型這類會換掉整棟建築的工作, 計算中做會讓 DB 當掉)。
     回傳 (輸出各行的欄位清單, 秒數)。"""
-    job = dsb.parent / f"_job_{datetime.now():%Y%m%d_%H%M%S}.txt"
-    job.write_text("\n".join("\t".join(map(str, ln)) for ln in lines) + "\n", encoding="ascii")
+    job = _write_job(dsb, lines)
     os.environ["DBMCP_JOB"] = str(job)
     if after:
         os.environ["DBMCP_PHASE"] = "after"
@@ -461,10 +570,9 @@ def _bridge(dsb: Path, lines, timeout_s=900, after=False):
     finally:
         os.environ.pop("DBMCP_JOB", None)
         os.environ.pop("DBMCP_PHASE", None)
-    out = Path(str(job) + ".out")
-    if not out.exists():
+    rows = _job_rows(job)
+    if rows is None:
         raise RuntimeError(BRIDGE_SETUP)
-    rows = [ln.split("\t") for ln in out.read_text(encoding="utf-8", errors="replace").splitlines() if ln]
     err = [r for r in rows if r[0] == "error"]
     if err:
         raise RuntimeError("DbMcpBridge 執行失敗:" + " ".join(err[0][1:]))
