@@ -371,6 +371,53 @@ def adjust_to_u(c, target_u):
     return changes, note
 
 
+# ---- 地點與氣象檔 ----
+
+WEATHER_DIR = Path(os.environ.get("PROGRAMDATA", r"C:\ProgramData")) / "DesignBuilder" / "Weather Data"
+# 套地點範本時不寫的欄位(名稱、分類、來源等範本本身的資料)
+LOCATION_SKIP = ("Id", "LocationName", "CategoryId", "Default", "Source", "ParamSelected")
+
+
+def find_locations(keyword, limit=15):
+    """地點名稱包含所有關鍵字(不分大小寫)的地點範本; 名稱像 "NY - NEW YORK/JOHN F. KE"、"SUNGSHAN/TAIPEI"。"""
+    words = keyword.lower().split()
+    rows = [r for r in table("LocationTemplates").values() if all(w in r["LocationName"].lower() for w in words)]
+    return sorted(rows, key=lambda r: r["LocationName"])[:limit], len(rows)
+
+
+def resolve_location(ref):
+    """地點範本編號或完整名稱 → row; 找不到或名稱重複時拋錯, 不自己挑。"""
+    lt = table("LocationTemplates")
+    ref = str(ref).strip()
+    if ref.isdigit():
+        if ref not in lt:
+            raise KeyError(f"DB 庫裡沒有編號 {ref} 的地點")
+        return lt[ref]
+    hits = [r for r in lt.values() if r["LocationName"].lower() == ref.lower()]
+    if len(hits) != 1:
+        raise KeyError(f"{'找不到' if not hits else '有多個'}叫「{ref}」的地點; 先用 db_find_locations 找, 再用編號指定")
+    return hits[0]
+
+
+def weather_of(loc):
+    """地點用的逐時氣象檔: (HourlyWeather row, 本機檔案路徑或 None)。DB 庫裡的大多要另外下載。"""
+    w = table("HourlyWeather").get(loc.get("HourlyWeatherData", ""), {})
+    name = w.get("Filename", "").lower()
+    local = next((p for p in WEATHER_DIR.glob("*.epw") if p.name.lower() == name), None) if name else None
+    return w, local
+
+
+def location_attributes(loc):
+    """套地點範本時寫入 Site 的屬性(欄位名稱就是 Site 屬性名稱)。API 只改 LocationTemplateId 不會帶入這些。"""
+    return [("LocationTemplateId", loc["Id"])] + [(k, v) for k, v in loc.items() if v != "" and k not in LOCATION_SKIP]
+
+
+def epw_location(path):
+    """EPW 第一行: LOCATION,城市,州,國家,來源,WMO,緯度,經度,時區,海拔。"""
+    head = Path(path).open(encoding="latin-1").readline().split(",")
+    return {"city": head[1], "wmo": head[5], "lat": float(head[6]), "lon": float(head[7])}
+
+
 # ---- 作息: 只從 DB 庫裡選, 不產生新的 ----
 
 SCHEDULE_KINDS = {"人員": ("OccupancySchedule",), "照明": ("FluorescentLightingSchedule",),

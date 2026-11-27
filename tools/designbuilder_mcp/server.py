@@ -785,6 +785,114 @@ def db_assign_activity(dsb_path: str, assignments: dict, apply: bool = False) ->
     return "\n".join(lines)
 
 
+# ---- 地點與氣象檔: 只從 DB 地點庫裡選 ----
+
+LOCATION_KEYS = ("LocationTemplateId", "ClimaticRegion", "Latitude", "Longitude", "Elevation", "HourlyWeatherData",
+                 "WinterToaDB996", "SummerToaMaxDB04")
+
+
+def _loc_line(loc):
+    w, local = dblibrary.weather_of(loc)
+    return (f"| {loc['Id']} | {loc['LocationName']} | {loc.get('ClimaticRegion', '')} | "
+            f"{loc.get('Latitude', '')}, {loc.get('Longitude', '')} | {loc.get('WinterToaDB996', '')} | "
+            f"{loc.get('SummerToaMaxDB04', '')} | {w.get('Filename', '—')} | {'本機有' if local else '**需下載**'} |")
+
+
+LOC_HEAD = ["| 編號 | 地點 | ASHRAE 氣候區 | 緯度, 經度 | 冬季設計 °C(99.6%) | 夏季設計 °C(0.4%) | 氣象檔 | |",
+            "|---:|---|---|---|---:|---:|---|---|"]
+
+
+@mcp.tool()
+def db_find_locations(keyword: str, limit: int = 15) -> str:
+    """在 DB 地點庫裡找地點(名稱包含所有關鍵字, 不分大小寫), 列出 ASHRAE 氣候區、經緯度、設計溫度與氣象檔是否已在本機。
+    地點名稱多為機場氣象站, 例如 "new york"、"chicago"、"taipei"、"shanghai"。不開 DB。"""
+    rows, total = dblibrary.find_locations(keyword, limit)
+    lines = [f"## 地點「{keyword}」:{total} 筆" + (f",列出前 {limit} 筆" if total > limit else ""), ""] + LOC_HEAD
+    lines += [_loc_line(r) for r in rows]
+    lines += ["", "用 `db_set_location` 套用(用編號指定)。「需下載」的氣象檔要先在 DB 的地點設定裡下載,"
+                  "或提供 EPW 檔路徑(epw_path)。"]
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def db_set_location(dsb_path: str, location: str, epw_path: str = "", apply: bool = False) -> str:
+    """把模型(副本)的地點換成 DB 地點庫裡的地點: 經緯度、時區、海拔、ASHRAE 氣候區、冬夏設計條件與逐時氣象檔,
+    全部取自 DB 的地點範本(DB 介面換範本會帶入這些, API 只改編號不會)。
+
+    Args:
+        dsb_path: .dsb 的完整路徑(操作的是副本, 不改原檔)
+        location: 地點範本編號(用 db_find_locations 找)或完整名稱
+        epw_path: 氣象檔不在本機時, 使用者提供的 EPW 檔; 會檢查檔頭經緯度與地點相差不到 0.5°,
+            寫入時複製到 DB 的氣象檔資料夾(用 DB 預期的檔名)
+        apply: False(預設)只產生預覽; 使用者確認後再用 True 寫入、存檔並讀回核對
+    """
+    try:
+        loc = dblibrary.resolve_location(location)
+    except KeyError as e:
+        raise ValueError(str(e).strip("'\""))
+    w, local = dblibrary.weather_of(loc)
+    if not w:
+        raise ValueError(f"地點「{loc['LocationName']}」在 DB 庫裡沒有對應的逐時氣象檔")
+    epw_note = ""
+    if not local and epw_path:
+        src = Path(epw_path)
+        if not src.exists() or src.suffix.lower() != ".epw":
+            raise ValueError(f"找不到 EPW 檔 {epw_path}")
+        head = dblibrary.epw_location(src)
+        d = max(abs(head["lat"] - float(loc["Latitude"])), abs(head["lon"] - float(loc["Longitude"])))
+        if d > 0.5:
+            raise ValueError(f"EPW 檔是 {head['city']}({head['lat']}, {head['lon']}),和地點 {loc['LocationName']}"
+                             f"({loc['Latitude']}, {loc['Longitude']})相差 {d:.1f}°,不像同一個地方,沒有使用")
+        epw_note = f"使用你提供的 EPW({head['city']},WMO {head['wmo']}),寫入時複製成 `{w['Filename']}`。"
+    elif not local:
+        epw_note = (f"**氣象檔 `{w['Filename']}` 不在本機**(`{dblibrary.WEATHER_DIR}`),不能套用:"
+                    "請在 DB 的地點設定裡下載這個氣象檔,或用 epw_path 提供 EPW 檔。")
+    dsb = _working_copy(dsb_path)
+    want = dict(dblibrary.location_attributes(loc))
+    rows, secs = _bridge(dsb, [("sdump", ",".join(LOCATION_KEYS))])
+    before = next((dict(c.split("=", 1) for c in r[1:]) for r in rows if r[0] == "site"), {})
+    cur = dblibrary.table("LocationTemplates").get(before.get("LocationTemplateId", ""))
+    lines = [f"## 套用地點{'(已寫入)' if apply else '(預覽,尚未寫入)'}:{dsb.stem}", "",
+             "| | 地點 | ASHRAE 氣候區 | 緯度, 經度 | 冬季設計 °C(99.6%) | 夏季設計 °C(0.4%) | 氣象檔 |",
+             "|---|---|---|---|---:|---:|---|",
+             f"| 目前 | {cur['LocationName'] if cur else '#' + before.get('LocationTemplateId', '')} | "
+             f"{before.get('ClimaticRegion', '')} | {before.get('Latitude', '')}, {before.get('Longitude', '')} | "
+             f"{before.get('WinterToaDB996', '')} | {before.get('SummerToaMaxDB04', '')} | "
+             f"{dblibrary.table('HourlyWeather').get(before.get('HourlyWeatherData', ''), {}).get('Filename', '')} |",
+             f"| 改成 | {loc['LocationName']}(#{loc['Id']},{loc.get('Source', '')}) | {loc.get('ClimaticRegion', '')} | "
+             f"{loc['Latitude']}, {loc['Longitude']} | {loc.get('WinterToaDB996', '')} | {loc.get('SummerToaMaxDB04', '')} | "
+             f"{w['Filename']} |", "",
+             f"寫入地點範本的 {len(want)} 項屬性(含逐月設計條件)。"]
+    if epw_note:
+        lines.append(epw_note)
+    if loc.get("ClimaticRegion"):
+        lines.append(f"這個地點的 ASHRAE 氣候區是 {loc['ClimaticRegion']};"
+                     f"圍護結構可用 `db_assign_construction(climate_zone=\"{loc['ClimaticRegion']}\")`。")
+    if not apply:
+        lines.append("確認無誤後,用同樣參數加上 apply=True 寫入。")
+        return "\n".join(lines)
+    if not local and not epw_path:
+        raise ValueError(epw_note.replace("**", ""))
+    if not local:
+        shutil.copy2(epw_path, dblibrary.WEATHER_DIR / w["Filename"])
+    rows, secs2 = _bridge(dsb, [("sset", k, v) for k, v in want.items()] + [("sdump", ",".join(want)), ("save",)])
+    after = next((dict(c.split("=", 1) for c in r[1:]) for r in rows if r[0] == "site"), {})
+    # 範本裡有些欄位不是 Site 屬性(WMO、Pressure、KoppenClass): DB 讀回 "UNKNOWN", 寫不進去也不影響模擬
+    absent = [k for k in want if after.get(k) == "UNKNOWN"]
+    mismatch = [f"{k}:應為 {v},讀回 {after.get(k, '(沒讀到)')}" for k, v in want.items()
+                if k not in absent and not _same(after.get(k, ""), v)]
+    problems = [f"第 {r[1]} 行:{' '.join(r[2:])}" for r in rows if r[0] == "lineerror"]
+    saved = any(r[0] == "save" and r[1] == "True" for r in rows)
+    lines += ["", f"### 寫入結果({secs + secs2} 秒)", "",
+              f"- 寫入 {len(want) - len(absent)} 項 Site 屬性;存檔:{'成功' if saved else '**失敗**'}。",
+              f"- 讀回核對:{'全部一致' if not mismatch else f'**{len(mismatch)} 項不一致**'}。"]
+    lines += [f"  - {m}" for m in (problems + mismatch)[:20]]
+    if absent:
+        lines.append(f"- 範本裡這些欄位 DB 的 Site 沒有對應屬性,沒有寫入(只是範本的說明資料):{'、'.join(absent)}。")
+    lines.append(f"\n修改後的模型副本:`{dsb}`。下次 `db_simulate` 會用這個地點與氣象檔。")
+    return "\n".join(lines)
+
+
 # ---- 作息: 只從 DB 庫裡選 ----
 
 def _sched_label(sid):
@@ -1078,7 +1186,7 @@ def _import_xml(xml: Path, out_dir: Path, name: str, template: Path):
 
 
 @mcp.tool()
-def db_build_model(params: dict, template_dsb: str = "") -> str:
+def db_build_model(params: dict, template_dsb: str = "", location: str = "") -> str:
     """由量體參數直接建出 DesignBuilder 模型(.dsb), 每層切周邊區與核心區、按樓層套用途, 並產生分區圖。
     建好的模型已裝 DbMcpBridge, 可以接著用 db_assign_construction / db_assign_schedule / db_simulate。
 
@@ -1094,6 +1202,7 @@ def db_build_model(params: dict, template_dsb: str = "") -> str:
             uses 各層用途 {"1": "大廳", "2-5": "辦公", "6-": "會議"}, default_use(預設 辦公), perimeter_depth(預設 4.5)
             用途只能用 db_zones 列出的中文用途; 數值都由 DB 範本庫帶入
         template_dsb: 裝好 DbMcpBridge 的模型(第一次需要, 之後沿用)
+        location: 選填, 地點範本編號(db_find_locations 找); 不給時用匯入範本的地點(舊金山)。氣象檔要已在本機
     """
     uses = {**{"default": params.get("default_use", "辦公")}, **params.get("uses", {})}
     try:
@@ -1111,6 +1220,14 @@ def db_build_model(params: dict, template_dsb: str = "") -> str:
         shutil.copy2(src, TEMPLATE_DSB)
     if not TEMPLATE_DSB.exists():
         raise ValueError(TEMPLATE_NOTE)
+    if location:  # 先檢查, 免得建了幾分鐘才發現地點不能用
+        try:
+            loc = dblibrary.resolve_location(location)
+        except KeyError as e:
+            raise ValueError(str(e).strip("'\""))
+        if not dblibrary.weather_of(loc)[1]:
+            raise ValueError(f"地點 {loc['LocationName']} 的氣象檔不在本機;先建模型不給 location,"
+                             f"再用 db_set_location 搭配 epw_path 設定")
     _check_idle()
     name = str(params.get("name", ""))
     if not re.fullmatch(r"[A-Za-z0-9_\-]+", name):
@@ -1131,6 +1248,8 @@ def db_build_model(params: dict, template_dsb: str = "") -> str:
     for z in info["zones"]:
         by_floor.setdefault(z["block"], z["use"])
     report = db_assign_activity(str(dsb), by_floor, apply=True)
+    if location:
+        report += "\n\n---\n\n" + db_set_location(str(dsb), location, apply=True)
     rows, _ = _bridge(dsb, [("dump", "ActivityTemplateId")])
     zones = (_zones(rows) or [[]])[-1]
     area_db, area_plan = sum(z["area"] for z in zones), info["floor_m2"]

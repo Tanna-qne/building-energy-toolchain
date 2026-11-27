@@ -10,7 +10,7 @@ The user builds and edits models in DesignBuilder. An AI assistant (through the 
 
 | Component | File | Role |
 |---|---|---|
-| DesignBuilder MCP server | [tools/designbuilder_mcp/server.py](../tools/designbuilder_mcp/server.py) | Sixteen tools that drive DesignBuilder through the official [db-process](https://github.com/DesignBuilderSoftware/db-process) command line (`/process=`) |
+| DesignBuilder MCP server | [tools/designbuilder_mcp/server.py](../tools/designbuilder_mcp/server.py) | Eighteen tools that drive DesignBuilder through the official [db-process](https://github.com/DesignBuilderSoftware/db-process) command line (`/process=`) |
 | Command-line runner | [tools/designbuilder_mcp/cli.py](../tools/designbuilder_mcp/cli.py) | The same chain without an assistant: simulate a `.dsb`, then run the measures report |
 | Desktop app | [tools/app/app.py](../tools/app/app.py) | Pick a `.dsb` / `.idf`, or enter a few building parameters, choose weather, run, open the report |
 | Engine adapter | [tools/dbengine/](../tools/dbengine/) | Makes DesignBuilder's bundled EnergyPlus usable from the command line (see below) |
@@ -34,6 +34,8 @@ All operations work on a copy of the user's model in `db_models/dbmcp/<model>/`;
 | `db_zones` | Lists every zone with its block, IDF name, area and *effective* (inherited) activity, occupancy and set points, read through DesignBuilder's API | Yes (headless) | Yes (2026-11-26) |
 | `db_assign_activity` | Assigns a space type to zones (by IDF name, block or `*`): previews the change, then writes the activity template id **and** the template's values, saves, and reads them back | Yes (headless) | Yes (2026-11-26) |
 | `db_build_model` | Builds a DesignBuilder model from massing parameters (rectangle, L, U, T, courtyard, podium with tower): 4.5 m perimeter zones plus a core on every floor, one use per floor from DesignBuilder's activity templates, and a floor plan page with a zone table | Yes (headless) | Yes (2026-11-26) |
+| `db_find_locations` | Searches DesignBuilder's location library (6,368 locations) and shows the ASHRAE climate zone, coordinates, design temperatures and whether the weather file is on this computer | No | Yes (2026-11-27) |
+| `db_set_location` | Applies a library location to the model: coordinates, time zone, elevation, climate zone, design conditions and hourly weather file (343 site attributes). A weather file that is not on this computer can be supplied as an EPW, which is checked against the location's coordinates | Yes (headless) | Yes (2026-11-27) |
 | `db_find_schedules` | Searches DesignBuilder's schedule library by name and shows each schedule's weekday, Saturday and Sunday profile | No | Yes (2026-11-26) |
 | `db_assign_schedule` | Assigns existing library schedules (occupancy, lighting, equipment, hot water) to zones: preview, then write, save and read back. It never creates new schedules | Yes (headless) | Yes (2026-11-26) |
 | `db_assign_construction` | Applies the ASHRAE 90.1-2019 baseline constructions for a climate zone (default 4A) and building type at building level: walls, roofs, exposed and ground floors, doors, glazing, internal constructions and infiltration. An optional target U for walls, roofs or exposed floors adds a copy of the baseline construction with a thicker or thinner insulation layer | Yes (headless) | Yes (2026-11-26) |
@@ -107,18 +109,24 @@ Every problem below came up while building and testing the tools on DesignBuilde
 15. **New models were lit at 15 W/m².** They inherited DesignBuilder's "Reference" lighting template. Fix: each use gets its ASHRAE 90.1-2019 Table G3.7 lighting template, with the units set to W/m². With the per-100-lux method DesignBuilder would multiply by the target illuminance, which gives 19.7 W/m² for a 500 lux office. Check: the IDF had 11.84 W/m² (office) and 13.99 W/m² (lobby); lighting energy fell by 14%.
 16. **The ASHRAE activity templates use an HVAC availability schedule for lighting.** Most ASHRAE 90.1 templates in the library point their lighting schedule to "ASHRAE 90.1 HVAC Availability - …" (full on throughout the opening hours, about 4,800 hours a year for an office). The laboratory template points to the occupancy schedule. The library also holds the matching "ASHRAE 90.1 Lighting Receptacle - …" schedule, usually with the id one lower (for example 6025 vs 6026), so this looks like an off-by-one error in the library data. Fix: `db_assign_activity` replaces the lighting schedule with the Lighting Receptacle schedule of the same family (18 of the 25 space types) and lists every replacement in its preview. Check: on the U-shaped test model all 18 zones used schedule 6025 in the IDF. Lighting energy fell from 137,849 to 83,942 kWh (−39%) and heating rose from 27,196 to 36,966 kWh, as expected with lower internal gains. The site EUI went from 105 to 84 kWh/m². The remaining lighting energy matches 12.9 W/m² × 2,912 full-load hours.
 
+### Location and weather
+
+17. **A location template's values are not loaded through the API either** (see problem 4). Fix: `db_set_location` writes all 343 fields of the location template as site attributes: coordinates, time zone, elevation, climate zone, monthly design conditions and weather file. Three fields (`WMO`, `Pressure`, `KoppenClass`) read back as `UNKNOWN` because the site has no such attributes. They are reported as not written, not as errors. Check: after switching a model from San Francisco to Chicago O'Hare, the IDF had Chicago's coordinates, time zone (−6), elevation and design days (winter −18.6 °C), and the Chicago weather file. The EUI went from 84 to 193 kWh/m², mostly heating.
+18. **Most weather files are not on the computer.** The library lists 3,178 weather files, but `IsProvided` means DesignBuilder can download a file, not that it is present; only three EPW files were in `C:\ProgramData\DesignBuilder\Weather Data`. A local file's name can also differ from the library name (`USA_IL_CHICAGO-OHARE INTL AP_TMY3.epw` vs `USA_IL_CHICAGO OHARE INTL AP_TMY3.epw`). What DesignBuilder does about a missing file during an unattended run was not tested, because it could stop at a dialog. Fix: the tools check for the exact file name and refuse to apply a location without it. The user can download the file in DesignBuilder or give an EPW file. The EPW's coordinates must be within 0.5° of the location's, and the file is copied under the name DesignBuilder expects.
+19. **Time zone ids do not follow the order of `TimeZoneCodes.txt`.** San Francisco (2) matched its row, but London (77) did not. The tools do not show a time zone label; the time zone is checked in the generated IDF instead.
+
 ### Building models from parameters
 
-17. **dragonfly did not expand repeated floors.** `separate_mid_floors` left a four-storey tower as one floor ×2. Fix: repeated floors are copied and moved up one by one, so every floor has real zones.
-18. **Zone names are lost.** The writer used numbers as zone titles. Fix: zones are named `F03 North` / `F03 Core` before writing, and blocks `F03`. Imported zones have no IDF names until the first calculation, so the tools accept zone names as well.
-19. **The floor areas look 5% short.** DesignBuilder reports net floor area (inside the walls), while the massing uses the outline. This is expected and is not treated as an error.
+20. **dragonfly did not expand repeated floors.** `separate_mid_floors` left a four-storey tower as one floor ×2. Fix: repeated floors are copied and moved up one by one, so every floor has real zones.
+21. **Zone names are lost.** The writer used numbers as zone titles. Fix: zones are named `F03 North` / `F03 Core` before writing, and blocks `F03`. Imported zones have no IDF names until the first calculation, so the tools accept zone names as well.
+22. **The floor areas look 5% short.** DesignBuilder reports net floor area (inside the walls), while the massing uses the outline. This is expected and is not treated as an error.
 
 ### Results
 
-20. **No hourly output by default.** DesignBuilder requests monthly and run period values only. Setting `HourlyOutput` inside the simulation's own hook only takes effect from the next run. Fix: `db_simulate(hourly=True)` sets it and saves first. Check: the first hourly run of a new model produced 8,760 rows.
-21. **Zones are numbers in the results.** With an evaluation licence the IDF uses zone handles as names, regardless of `IDFNameType`. Fix: every simulation with the bridge saves `zones.json` (handle → zone name).
-22. **Building meters are not in the `.eso`.** EnergyPlus writes them to `eplusout.mtr`, which is now collected too. DesignBuilder also appends `,ON` to some frequencies in the `.eso` dictionary (`!Hourly,ON`), which the reader handles.
-23. **Totals are checked.** For every meter, `db_results` compares the sum of the hourly, daily or monthly values with EnergyPlus's run period value. They have matched in all tests (for example 195,416.7 kWh total electricity).
+23. **No hourly output by default.** DesignBuilder requests monthly and run period values only. Setting `HourlyOutput` inside the simulation's own hook only takes effect from the next run. Fix: `db_simulate(hourly=True)` sets it and saves first. Check: the first hourly run of a new model produced 8,760 rows.
+24. **Zones are numbers in the results.** With an evaluation licence the IDF uses zone handles as names, regardless of `IDFNameType`. Fix: every simulation with the bridge saves `zones.json` (handle → zone name).
+25. **Building meters are not in the `.eso`.** EnergyPlus writes them to `eplusout.mtr`, which is now collected too. DesignBuilder also appends `,ON` to some frequencies in the `.eso` dictionary (`!Hourly,ON`), which the reader handles.
+26. **Totals are checked.** For every meter, `db_results` compares the sum of the hourly, daily or monthly values with EnergyPlus's run period value. They have matched in all tests (for example 195,416.7 kWh total electricity).
 
 ## Known limitations
 
@@ -126,7 +134,7 @@ Every problem below came up while building and testing the tools on DesignBuilde
 - When DesignBuilder stops at a dialog, the tools notice only after 300 seconds without progress, and cannot read the dialog.
 - Every bridge job runs a heating design calculation, which takes about a minute. Building a model and assigning uses takes four to five minutes.
 - A model needs the bridge script before the bridge tools work. It can be installed once in Script Manager, or the model can be created with `db_build_model`. `db_update_bridge` depends on the undocumented `.dsb` layout.
-- New models take their location from the honeybee-designbuilder XML template (San Francisco); there is no tool yet to choose the weather file.
+- Weather files that are not on this computer must be downloaded in DesignBuilder or supplied as an EPW file; the tools do not download them. Without `location`, new models keep the template's location (San Francisco).
 - Results stored inside the `.dsb` (design loads, daylighting, CFD) cannot be read, and `db_calculate` has not been tested.
 - `db_results` writes CSV only (no `.xlsx`).
 - The bundled engine has no IDF version updater, so IDFs older than 23.1 must be re-exported from DesignBuilder.
