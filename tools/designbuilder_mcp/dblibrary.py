@@ -350,6 +350,76 @@ def template_construction_attributes(row):
     return out + [(k, row[k]) for k in ("InfiltrationOn", "InfiltrationValue") if row.get(k, "") != ""]
 
 
+# ---- 簡易空調(DB Simple HVAC): 範本的季節效率與燃料 ----
+# EnergyPlus 用理想負載算出冷熱需求, DB 自己的結果畫面再用範本的季節效率換算成燃料; 這裡照同樣的算法。
+# 選項只收 DB 範本庫裡的範本; 效率、燃料、新風都是範本的值, 不是我們定的。
+HVAC_SYSTEMS = {  # 表單選項 → DB 空調範本名稱
+    "風機盤管＋冷機＋燃氣鍋爐": "Fan Coil Unit (4-Pipe), Air cooled Chiller",
+    "VAV 中央空調＋冷機＋燃氣鍋爐": "VAV, Air-cooled Chiller, Reheat",
+    "箱型機 Packaged DX(全電)": "Packaged DX",
+    "分離式冷氣＋新風(全電)": "Split + Separate Mechanical Ventilation",
+    "VRF 多聯機＋新風(全電)": "VRF (Air-Cooled), Heat Recovery, DOAS",
+    "PTHP 壁掛熱泵(全電,無新風)": "PTHP",
+    "暖氣片＋燃氣鍋爐(無冷氣,自然通風)": "Radiator heating, Boiler HW, Nat Vent",
+}
+# 範本欄位裡模型讀不到(實測讀回 UNKNOWN)或只是範本說明的, 不寫
+_HVAC_SKIP = {"Id", "Name", "CategoryId", "Default", "Colour", "Locked", "Scratch", "Source", "RegionId", "NCMID",
+              "NCMORDER", "NCMCOD", "NCMCATEGORY", "NCMCATEGORY1", "ParamSelected", "IsSystem", "HVACType", "DSMHVACId",
+              "FansOn", "FansSupplyOn", "FansSupplyPower", "FansExtractOn", "FansExtractPower", "FanMotorEfficiency",
+              "NaturalVentilationUserDefined", "AirDistributionExhaustHeight"}
+# 換算燃料要讀的模型屬性(建築層級)
+HVAC_READ = ("HVACTemplateId", "HeatingOn", "ActiveCoolingOn", "MechanicalVentilationOn", "NaturalVentilationOn",
+             "BoilerFuel", "SCoPFrac", "SSEERFrac", "DHWTemplateId", "DHWCoP", "DHWFuelType")
+
+
+def hvac_template(label):
+    """表單選項或範本名稱 → 範本 row。"""
+    name = HVAC_SYSTEMS.get(label, label)
+    rows = [r for r in table("HVACTemplates").values() if r["Name"] == name]
+    if not rows:
+        raise KeyError(f"空調系統只能選:{'、'.join(HVAC_SYSTEMS)}")
+    return min(rows, key=lambda r: int(r["Id"]))
+
+
+def hvac_attributes(row):
+    """套用空調範本要寫入的建築屬性(API 只改編號不帶數值, 所以逐項寫)。"""
+    return [(k, v) for k, v in row.items() if k not in _HVAC_SKIP and v != ""]
+
+
+def fuel(code, kind="hvac"):
+    """DB 燃料欄位 → 「電」/「天然氣」/ 原文。只有編號時: 空調 BoilerFuel 1 = 電、2 = 天然氣;
+    熱水 DHWFuelType 1 = 天然氣(兩張表的編號不同, 有文字時以文字為準)。"""
+    s = str(code or "").strip()
+    text = s.split("-", 1)[1].strip().lower() if "-" in s else ""
+    if "electric" in text:
+        return "電"
+    if "gas" in text:
+        return "天然氣"
+    if text:
+        return text
+    return ({"1": "電", "2": "天然氣"} if kind == "hvac" else {"1": "天然氣"}).get(s, s or "未知")
+
+
+def adjust_glazing(g, target_u=None, shgc=None):
+    """基準玻璃(簡易定義: U 值 + 日射透過率 = SHGC)→ 新玻璃要改的欄位與說明。可見光透過率沿用基準。"""
+    if not g.get("DefinitionMethod", "").startswith("2"):
+        raise ValueError(f"基準玻璃「{g['Name']}」不是簡易定義(U 值 + SHGC),不能直接改")
+    changes, said = {}, []
+    if target_u is not None:
+        if not 0.3 <= target_u <= 6.5:
+            raise ValueError(f"U 值要在 0.3–6.5 W/m²K 之間,收到 {target_u:g}")
+        changes["U-Value"] = f"{target_u:g}"
+        said.append(f"U {target_u:g}")
+    if shgc is not None:
+        if not 0.05 <= shgc <= 0.9:
+            raise ValueError(f"SHGC 要在 0.05–0.9 之間,收到 {shgc:g}")
+        changes["TransSolar"] = f"{shgc:g}"
+        said.append(f"SHGC {shgc:g}")
+    note = "、".join(said)
+    changes["Name"] = f"{g['Name']} -> {', '.join(said)} (DbMcp)"  # 橋接的工作檔是 ASCII
+    return changes, note
+
+
 def adjust_to_u(c, target_u):
     """把構造(欄位 dict)裡熱阻最大的那層(保溫層)改厚或改薄, 讓 U 等於 target_u。
     回傳 (要改的欄位, 說明)。目標做不到(拿掉保溫也不夠)就拋 ValueError, 不硬湊。"""

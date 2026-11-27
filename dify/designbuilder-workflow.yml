@@ -16,7 +16,7 @@ workflow:
     selector:
     - env
     - DBMCP_URL
-    value: https://your-tunnel.example.com
+    value: https://db.377280.xyz
     value_type: string
   - description: db_models/dbmcp/_http_token.txt 裡的 token
     id: env-token
@@ -24,7 +24,7 @@ workflow:
     selector:
     - env
     - DBMCP_TOKEN
-    value: ''
+    value: 'ZyYCkT1vpgKKPVv_wiGbV7QKOcUOwMVbjdU5KgLhPvU'
     value_type: secret
   features:
     file_upload:
@@ -230,6 +230,19 @@ workflow:
           - 非住宅
           - 住宅
           - 半空調
+        - variable: hvac
+          label: 空調系統(效率與燃料來自 DB 範本;不選 = 沿用模型設定)
+          type: select
+          required: false
+          options:
+          - 沿用模型設定
+          - 風機盤管＋冷機＋燃氣鍋爐
+          - VAV 中央空調＋冷機＋燃氣鍋爐
+          - 箱型機 Packaged DX(全電)
+          - 分離式冷氣＋新風(全電)
+          - VRF 多聯機＋新風(全電)
+          - PTHP 壁掛熱泵(全電,無新風)
+          - 暖氣片＋燃氣鍋爐(無冷氣,自然通風)
         - variable: run_measures
           label: 跑節能措施與回本(多 5–10 分鐘)
           type: select
@@ -276,6 +289,26 @@ workflow:
           required: false
         - variable: wwr
           label: 窗牆比(0–1,預設 0.4)
+          type: number
+          required: false
+        - variable: wall_u
+          label: 外牆 U 值 W/m²K(有實際數據才填;不填用 ASHRAE 基準)
+          type: number
+          required: false
+        - variable: roof_u
+          label: 屋頂 U 值 W/m²K(不填用 ASHRAE 基準)
+          type: number
+          required: false
+        - variable: floor_u
+          label: 外挑樓板 U 值 W/m²K(不填用 ASHRAE 基準)
+          type: number
+          required: false
+        - variable: window_u
+          label: 外窗 U 值 W/m²K(不填用 ASHRAE 基準)
+          type: number
+          required: false
+        - variable: window_shgc
+          label: 外窗 SHGC 日射得熱係數 0–1(不填用 ASHRAE 基準)
           type: number
           required: false
         - variable: notch_width
@@ -339,8 +372,9 @@ workflow:
         code: |
           import json
 
-          def main(mode, location, building_type, run_measures, name, shape, width, depth, stories, uses,
-                   floor_height, wwr, notch_width, notch_depth, stem_width, bar_depth, court_width, court_depth,
+          def main(mode, location, building_type, hvac, run_measures, name, shape, width, depth, stories, uses,
+                   floor_height, wwr, wall_u, roof_u, floor_u, window_u, window_shgc,
+                   notch_width, notch_depth, stem_width, bar_depth, court_width, court_depth,
                    tower_width, tower_depth, tower_stories, dsb_path, apply_constructions) -> dict:
               form = dict(locals())
               def text(v):
@@ -357,6 +391,8 @@ workflow:
           value_selector: [start, location]
         - variable: building_type
           value_selector: [start, building_type]
+        - variable: hvac
+          value_selector: [start, hvac]
         - variable: run_measures
           value_selector: [start, run_measures]
         - variable: name
@@ -375,6 +411,16 @@ workflow:
           value_selector: [start, floor_height]
         - variable: wwr
           value_selector: [start, wwr]
+        - variable: wall_u
+          value_selector: [start, wall_u]
+        - variable: roof_u
+          value_selector: [start, roof_u]
+        - variable: floor_u
+          value_selector: [start, floor_u]
+        - variable: window_u
+          value_selector: [start, window_u]
+        - variable: window_shgc
+          value_selector: [start, window_shgc]
         - variable: notch_width
           value_selector: [start, notch_width]
         - variable: notch_depth
@@ -718,14 +764,18 @@ workflow:
             你是建築能耗顧問,用繁體中文為業主寫一份白話報告。資料是 DesignBuilder 與 EnergyPlus 的模擬結果(JSON)。
             規則:
             1. 只能用 JSON 裡有的數字,不要自己估算、補數字或推測沒有的資料;需要的資料沒有就寫「這次沒有算」。
-            2. 先一句話結論(全年用能與單位面積能耗、最大的用能項目、最值得做的節能措施)。
-            3. 依序:建築與條件(量體、各層用途、地點與氣候區、構造基準)→ 全年用能與分項(表格)→ 尖峰用電與溫度不達標時數 →
+            2. 先一句話結論(全年用能與單位面積能耗、最大的用能項目、最值得做的節能措施)。JSON 有 delivered 時,
+               結論與用能數字以 delivered(實際的電與天然氣)為主;simulation 的分項是「建築需要的冷熱量」,放在後面當參考。
+            3. 依序:建築與條件(量體、各層用途、地點與氣候區、構造基準、空調系統 hvac)→ 全年用能與分項(表格;有 delivered 時
+               列出每項的燃料、冷熱需求、效率、實際用量)→ 依燃料合計(電、天然氣)→ 尖峰用電與溫度不達標時數 →
                節能措施 → 模型與檔案位置 → 注意事項。
+               有 delivered 時在注意事項寫出 delivered.method(換算方式,不含風機與水泵)。
             4. 節能措施:JSON 有 measures 時用表格(措施、判讀、省能 %、每年省、投資、回本;依 JSON 的順序),並寫出投資與能源價格是假設值(measures.cost_note)。
                JSON 沒有 measures 時,這一節只寫一句「這次沒有算節能措施」,不要畫表格,結論也不要提最值得做的措施。
             5. simulation.district_loads 為 true 時說明:空調是理想負載,供暖 / 供冷數字是建築需要的冷熱量,不是設備實際耗能;
                尖峰用電只含電力(照明、設備等),不含區域供暖 / 供冷。
-            6. constructions.glazing 是玻璃範本的名稱,名稱裡的窗牆比區間(例如「30% to 40% of Wall」)只是範本分檔,不是這棟建築的窗牆比;
+            6. constructions.user_values 有內容時,說明哪些部位用了填寫的實際數據、其餘部位用 ASHRAE 基準。
+               constructions.glazing 是玻璃範本的名稱,名稱裡的窗牆比區間(例如「30% to 40% of Wall」)只是範本分檔,不是這棟建築的窗牆比;
                只寫玻璃的 U 值,不要把那個區間寫成建築條件。
             7. 不達標時數、尖峰時間等只陳述數字,不要解釋原因(例如不要說「供暖能力不足」);理想負載下設備容量不是限制。
             8. warnings 有內容時放在注意事項。不要用「作為 AI」之類的話,不要寫開場白,不要輸出思考過程。

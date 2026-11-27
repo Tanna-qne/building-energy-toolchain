@@ -106,7 +106,8 @@ async def options(request):
             if w.get("Filename", "").lower() == p.name.lower() and w.get("WMO") and w.get("WMO") == r.get("WMO"):
                 local.append({"id": r["Id"], "name": r["LocationName"], "climate_zone": r.get("ClimaticRegion", "")})
     return JSONResponse({"uses": list(dblibrary.SPACE_TYPES), "building_types": list(dblibrary.BUILDING_TYPES),
-                         "shapes": list(workflow.SHAPE_FIELDS) + ["podium_tower"], "locations_with_weather": local})
+                         "shapes": list(workflow.SHAPE_FIELDS) + ["podium_tower"], "locations_with_weather": local,
+                         "hvac_systems": [workflow.HVAC_KEEP] + list(dblibrary.HVAC_SYSTEMS)})
 
 
 def build_app(token, public_hosts=()):

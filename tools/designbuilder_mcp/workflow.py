@@ -18,6 +18,40 @@ from eplus_summary import summarize
 SHAPE_FIELDS = {"rect": (), "L": ("notch_width", "notch_depth"), "U": ("notch_width", "notch_depth"),
                 "T": ("stem_width", "bar_depth"), "courtyard": ("court_width", "court_depth")}
 MEASURES_TIMEOUT_S = 40 * 60
+HVAC_KEEP = "沿用模型設定"
+ENVELOPE_FIELDS = {"外牆": "wall_u", "屋頂": "roof_u", "外挑樓板": "floor_u", "外窗": "window_u"}  # 部位 → 表單欄位
+# 理想負載的分項 → 換算時用哪一組效率
+LOAD_KIND = {"供暖": "heating", "製冷": "cooling", "熱水": "dhw"}
+
+
+def delivered_energy(sim_out, hvac):
+    """理想負載(區域冷熱)→ 實際的電與天然氣: 冷熱需求 ÷ 空調範本的季節效率, 熱水需求 ÷ 熱水效率;
+    照明、設備等原本就是電, 照原值。和 DB 簡易空調的結果畫面同一算法; 不含風機與水泵(簡易空調不模擬)。"""
+    eff = {"heating": (hvac["heating_fuel"], hvac["heating_scop"]), "cooling": ("電", hvac["cooling_sseer"]),
+           "dhw": (hvac["dhw_fuel"], hvac["dhw_cop"])}
+    rows, by_fuel, problems = [], {}, []
+    for e in sim_out["end_uses"]:
+        kind = LOAD_KIND.get(e["name"])
+        if kind:
+            fuel, cop = eff[kind]
+            if not cop:
+                problems.append(f"{e['name']}的效率讀不到,這一項沒有換算")
+                fuel, kwh = "冷熱需求(未換算)", e["kWh"]
+            else:
+                kwh = e["kWh"] / cop
+            rows.append({"name": e["name"], "fuel": fuel, "load_kWh": e["kWh"], "efficiency": cop, "kWh": round(kwh)})
+        else:
+            rows.append({"name": e["name"], "fuel": "電", "load_kWh": None, "efficiency": None, "kWh": e["kWh"]})
+        by_fuel[rows[-1]["fuel"]] = by_fuel.get(rows[-1]["fuel"], 0) + rows[-1]["kWh"]
+    if not hvac["cooling_on"] and any(r["name"] == "製冷" and r["load_kWh"] for r in rows):
+        problems.append("空調範本沒有供冷,但模擬仍有製冷需求")
+    total = sum(by_fuel.values())
+    for r in rows:
+        r["share_pct"] = round(100 * r["kWh"] / total, 1) if total else 0
+    return {"method": "冷熱需求 ÷ 空調範本的季節效率(DB 簡易空調的算法);不含風機與水泵用電",
+            "hvac": hvac, "end_uses": rows, "by_fuel_kWh": {k: round(v) for k, v in by_fuel.items()},
+            "total_kWh": round(total), "eui_kWh_m2": round(total / sim_out["floor_m2"], 1) if sim_out["floor_m2"] else None,
+            "problems": problems}
 
 
 def _f(form, key, required=True):
@@ -74,6 +108,16 @@ def form_to_params(form):
          "building_type": str(form.get("building_type", "") or "非住宅").strip()}
     if p["building_type"] not in dblibrary.BUILDING_TYPES:
         raise ValueError(f"建築類型只能是 {'、'.join(dblibrary.BUILDING_TYPES)}")
+    # 外殼: 有實際數據就填, 沒填的部位用 ASHRAE 基準
+    p["target_u"] = {part: v for part, key in ENVELOPE_FIELDS.items() if (v := _f(form, key, required=False)) is not None}
+    p["window_shgc"] = _f(form, "window_shgc", required=False)
+    hvac = str(form.get("hvac", "") or "").strip()
+    if hvac and hvac != HVAC_KEEP:
+        try:
+            dblibrary.hvac_template(hvac)
+        except KeyError as e:
+            raise ValueError(str(e).strip("'\""))
+        p["hvac"] = hvac
     loc = resolve_location(form.get("location"))
     if loc:
         if not dblibrary.weather_of(loc)[1]:
@@ -185,9 +229,28 @@ def run(form):
         if not cz:
             warnings.append("沒有地點的氣候區,用預設 4A 套構造")
             cz = "4A"
-        step("ASHRAE 基準構造", server.db_assign_construction, str(dsb), cz, p["building_type"], apply=True)
+        step("構造(ASHRAE 基準" + (",加上填寫的數據)" if p["target_u"] or p["window_shgc"] is not None else ")"),
+             server.db_assign_construction, str(dsb), cz, p["building_type"], target_u=p["target_u"] or None,
+             window_shgc=p["window_shgc"], apply=True)
         tmpl, glazing = dblibrary.baseline_envelope(cz, p["building_type"])
-        out["constructions"] = {"climate_zone": cz, "template": tmpl["Name"], "glazing": glazing["Name"]}
+        out["constructions"] = {"climate_zone": cz, "template": tmpl["Name"], "glazing": glazing["Name"],
+                                "user_values": {**{f"{k} U (W/m²K)": v for k, v in p["target_u"].items()},
+                                                **({"外窗 SHGC": p["window_shgc"]} if p["window_shgc"] is not None else {})},
+                                "note": "沒填的部位用 ASHRAE 90.1-2019 附錄 G 基準;填了的部位用填寫的數據"}
+    elif p["target_u"] or p["window_shgc"] is not None:
+        warnings.append("既有模型沒有選「換成 ASHRAE 基準構造」,填寫的外殼數據沒有套用")
+    hvac_box = {}
+
+    def hvac_step():
+        text, hvac_box["info"] = server.assign_hvac(str(dsb), p.get("hvac"), apply=bool(p.get("hvac")))
+        return text
+    step("空調系統" if p.get("hvac") else "讀空調設定", hvac_step)
+    hvac = hvac_box["info"]
+    out["hvac"] = {"chosen": p.get("hvac", HVAC_KEEP), "template": hvac["template"], "template_id": hvac["template_id"],
+                   "heating": f"{hvac['heating_fuel']},季節效率 {hvac['heating_scop']}" if hvac["heating_on"] else "無",
+                   "cooling": f"電,季節效率 {hvac['cooling_sseer']}" if hvac["cooling_on"] else "無",
+                   "ventilation": "機械新風" if hvac["mech_vent_on"] else ("自然通風" if hvac["nat_vent_on"] else "無"),
+                   "dhw": f"{hvac['dhw_fuel']},效率 {hvac['dhw_cop']}"}
     text = step("年度模擬", server.db_simulate, str(dsb))
     sim = max(dsb.parent.glob("sim_*"), key=lambda q: q.stat().st_mtime)
     if not (sim / "eplustbl.htm").exists() or "模擬沒有成功" in text:
@@ -201,6 +264,11 @@ def run(form):
                          "peak_electricity_kW": round(s["peak_elec_kW"], 1), "peak_time": s["peak_elec_time"],
                          "unmet_heating_h": s["unmet_heating_h"], "unmet_cooling_h": s["unmet_cooling_h"],
                          "district_loads": any("District" in k for k in s["by_fuel_kWh"])}
+    if out["simulation"]["district_loads"]:
+        d = delivered_energy(out["simulation"], hvac)
+        warnings += d.pop("problems")
+        d.pop("hvac")
+        out["delivered"] = d
     if p["measures"]:
         t = time.time()
         measures, currency, problem = _measures(sim)

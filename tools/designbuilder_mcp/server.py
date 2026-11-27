@@ -1026,7 +1026,8 @@ def _u(u):
 
 @mcp.tool()
 def db_assign_construction(dsb_path: str, climate_zone: str = "4A", building_type: str = "非住宅",
-                           target_u: Optional[dict] = None, apply: bool = False) -> str:
+                           target_u: Optional[dict] = None, window_shgc: Optional[float] = None,
+                           apply: bool = False) -> str:
     """把整棟建築的構造換成 ASHRAE 90.1-2019 基準(Appendix G)構造:外牆、屋頂、外挑樓板、地坪、外門、外窗玻璃,
     連同範本裡的內部構造與滲風一起寫入(DB 介面換範本會帶入這些, API 只改編號不會)。U 值由材料層計算。
     寫在建築層級, 沒有自己設定的區塊與熱區會跟著繼承; 有自己設定的會列出來, 不強改。
@@ -1035,42 +1036,52 @@ def db_assign_construction(dsb_path: str, climate_zone: str = "4A", building_typ
         dsb_path: .dsb 的完整路徑(操作的是副本, 不改原檔)
         climate_zone: ASHRAE 氣候區, 例如 4A(預設)、5B、3C
         building_type: 非住宅(預設)、住宅、半空調
-        target_u: 選填, {部位: 目標 U (W/m²K)}, 部位限 外牆、屋頂、外挑樓板; 會複製基準構造、調整保溫層厚度,
-            在模型裡新增一個構造。例如 {"外牆": 0.4}
+        target_u: 選填, {部位: 目標 U (W/m²K)}, 部位限 外牆、屋頂、外挑樓板、外窗。牆、屋頂、樓板會複製基準構造、
+            調整保溫層厚度; 外窗複製基準玻璃(簡易定義)改 U 值。都在模型裡新增一筆, 例如 {"外牆": 0.4, "外窗": 1.8}
+        window_shgc: 選填, 外窗的日射得熱係數 SHGC(0–1); 不給沿用基準玻璃
         apply: False(預設)只產生預覽; 使用者確認後再用 True 寫入、存檔並讀回核對
     """
     try:
         tmpl, glazing = dblibrary.baseline_envelope(climate_zone, building_type)
     except (KeyError, ValueError) as e:
         raise ValueError(str(e).strip("'\""))
-    target_u = target_u or {}
-    bad = [p for p in target_u if p not in dblibrary.TARGET_U_PARTS]
+    target_u = {k: float(v) for k, v in (target_u or {}).items()}
+    bad = [p for p in target_u if p not in dblibrary.TARGET_U_PARTS + ("外窗",)]
     if bad:
-        raise ValueError(f"目標 U 只能給 {'、'.join(dblibrary.TARGET_U_PARTS)};不能給:{'、'.join(bad)}")
+        raise ValueError(f"目標 U 只能給 {'、'.join(dblibrary.TARGET_U_PARTS + ('外窗',))};不能給:{'、'.join(bad)}")
     cons = dblibrary.table("Constructions")
     want = dict(dblibrary.template_construction_attributes(tmpl))
     want["ConstructionTemplateId"] = tmpl["Id"]
     want["GlazingType"] = glazing["Id"]
-    copies, notes = [], {}  # copies: (基準構造編號, 要改的欄位); 新構造的編號 DB 存檔時才知道, 先用 $NEWk 代替
+    # copies: (表, 基準紀錄編號, 要改的欄位); 新紀錄的編號 DB 存檔時才知道, 先用 $NEWk 代替
+    copies, notes = [], {}
     for part, attrs in dblibrary.ENVELOPE_PARTS:
         if part not in target_u:
             continue
         base = want[attrs[0]]
         try:
-            changes, note = dblibrary.adjust_to_u(cons[base], float(target_u[part]))
+            changes, note = dblibrary.adjust_to_u(cons[base], target_u[part])
         except ValueError as e:
             raise ValueError(f"{part}:{e}")
-        copies.append((base, changes))
+        copies.append(("Constructions", base, changes))
         notes[part] = note
         for a in attrs:
             want[a] = f"$NEW{len(copies)}"
+    if "外窗" in target_u or window_shgc is not None:
+        try:
+            changes, note = dblibrary.adjust_glazing(glazing, target_u.get("外窗"), window_shgc)
+        except ValueError as e:
+            raise ValueError(f"外窗:{e}")
+        copies.append(("Glazing", glazing["Id"], changes))
+        notes["外窗"] = note
+        want["GlazingType"] = f"$NEW{len(copies)}"
     # ASHRAE 基準地坪是 F 係數構造, 熱損失按外露周長算; 沒有外露周長的熱區(貼地的核心區)DB 會拒絕計算。
     # 這些熱區改用同一組材料層的一般構造(表面熱阻取範本的一般地坪), 其他熱區維持 F 係數
     slab = cons.get(want.get("CombinedGroundFloorConstr", ""), {})
     slab_layered = None
     if slab.get("DefinitionMethod", "").startswith("6"):
         ref = cons.get(tmpl.get("GroundSlabConstr", ""), {})
-        copies.append((slab["Id"], {"DefinitionMethod": "1-Material layers", "FFactor": "0",
+        copies.append(("Constructions", slab["Id"], {"DefinitionMethod": "1-Material layers", "FFactor": "0",
                                     "SRO": ref.get("SRO") or "0.04", "SRI": ref.get("SRI") or "0.17",
                                     "Name": f"{slab['Name']} - layers for interior zones (DbMcp)"}))
         slab_layered = f"$NEW{len(copies)}"
@@ -1081,13 +1092,15 @@ def db_assign_construction(dsb_path: str, climate_zone: str = "4A", building_typ
     job = [("bdump", ",".join(keys)), ("dump", ",".join(main)), ("table", "Constructions", "+10000"),
            ("table", "Glazing", "+10000")]
     if apply:
-        job += [("copy", "Constructions", base, *[f"{k}={v}" for k, v in ch.items()]) for base, ch in copies]
+        job += [("copy", tbl, base, *[f"{k}={v}" for k, v in ch.items()]) for tbl, base, ch in copies]
         job += [("bset", k, v) for k, v in want.items()]
         if slab_layered:
             job.append(("groundfix", slab_layered))
         job += [("bdump", ",".join(keys)), ("dump", ",".join(main))]
-        if copies:
-            job.append(("table", "Constructions", ",".join(f"$NEW{i + 1}" for i in range(len(copies)))))
+        for tbl in ("Constructions", "Glazing"):
+            new = [f"$NEW{i + 1}" for i, c in enumerate(copies) if c[0] == tbl]
+            if new:
+                job.append(("table", tbl, ",".join(new)))
         job.append(("save",))
     rows, secs = _bridge(dsb, job)
     before = (_buildings(rows) or [{}])[0]
@@ -1102,13 +1115,16 @@ def db_assign_construction(dsb_path: str, climate_zone: str = "4A", building_typ
         cur_name, cur_u = _cons_label(before.get(attrs[0], ""), model_cons)
         base = tmpl[attrs[0]]
         new_name, new_u = _cons_label(base, {})
-        if part in notes:
+        if part in notes and part in target_u:
             new_name, new_u = f"{new_name} -> U {target_u[part]:g}", float(target_u[part])
         lines.append(f"| {part} | {cur_name} | {_u(cur_u)} | {new_name} | {_u(new_u)} | {notes.get(part, '')} |")
     cur_g = (_records(rows, "Glazing").get(before.get("GlazingType", "")) or
              dblibrary.table("Glazing").get(before.get("GlazingType", "")) or {})
+    g_name, g_u = glazing["Name"], float(glazing["U-Value"])
+    if "外窗" in notes:
+        g_name, g_u = f"{g_name} -> {notes['外窗']}", target_u.get("外窗", g_u)
     lines.append(f"| 外窗玻璃 | {cur_g.get('Name', '#' + before.get('GlazingType', ''))} | {cur_g.get('U-Value', '')} | "
-                 f"{glazing['Name']} | {float(glazing['U-Value']):.3f} | 日射透過率 {glazing['TransSolar']} |")
+                 f"{g_name} | {g_u:.3f} | SHGC {window_shgc if window_shgc is not None else glazing['TransSolar']} |")
     internal = [k for k in want if k.endswith("Constr") and k not in main]
     lines += [f"| 滲風 | {before.get('InfiltrationValue', '')} ach | | {tmpl.get('InfiltrationValue', '')} ach | | |", "",
               f"U 值依材料層與 DB 的表面熱阻計算(W/m²K);地坪以 F 係數表示,不算 U。外窗用 2019 基準 {dblibrary.GLAZING_BRACKET} "
@@ -1127,11 +1143,14 @@ def db_assign_construction(dsb_path: str, climate_zone: str = "4A", building_typ
     after_z = (_zones(rows) or [[]])[-1]
     problems = [f"第 {r[1]} 行:{' '.join(r[2:])}" for r in rows if r[0] in ("lineerror", "norec")]
     if len(new_ids) != len(copies):
-        problems.append(f"應新增 {len(copies)} 個構造,實際 {len(new_ids)} 個")
-    taken = set(model_cons) | set(dblibrary.table("Constructions"))
-    for i in new_ids:
-        if not i.isdigit() or int(i) < 10000 or i in taken or new_ids.count(i) > 1:
-            problems.append(f"新構造的編號 {i} 不合理(應為 10000 以上、沒被用過);請勿使用這份模型,改用備份")
+        problems.append(f"應新增 {len(copies)} 筆紀錄,實際 {len(new_ids)} 筆")
+    model_glz = _records(rows[:first_add], "Glazing")
+    for k, i in enumerate(new_ids):
+        tbl = copies[k][0] if k < len(copies) else "Constructions"
+        taken = (set(model_cons) | set(cons)) if tbl == "Constructions" else (set(model_glz) | set(dblibrary.table("Glazing")))
+        same_tbl = [n for j, n in enumerate(new_ids) if j < len(copies) and copies[j][0] == tbl]
+        if not i.isdigit() or int(i) < 10000 or i in taken or same_tbl.count(i) > 1:
+            problems.append(f"新{tbl}的編號 {i} 不合理(應為 10000 以上、沒被用過);請勿使用這份模型,改用備份")
     mismatch = [f"建築 {k}:應為 {v},讀回 {after_b.get(k, '(沒讀到)')}" for k, v in resolved.items()
                 if not _same(after_b.get(k, ""), v)]
     fixed = {r[1]: r[2] for r in rows if r[0] == "groundfix"}
@@ -1143,14 +1162,19 @@ def db_assign_construction(dsb_path: str, climate_zone: str = "4A", building_typ
                  if a in resolved and not _same(z["attrs"].get(a, ""), resolved[a])
                  and not (a == "CombinedGroundFloorConstr" and z["zone"] in fixed)]
     new_u = []
-    final_cons = _records(rows, "Constructions")
-    for i, (base, ch) in enumerate(copies):
-        rec = final_cons.get(new_ids[i]) if i < len(new_ids) else None
+    final_cons, final_glz = _records(rows, "Constructions"), _records(rows, "Glazing")
+    for i, (tbl, base, ch) in enumerate(copies):
+        nid = new_ids[i] if i < len(new_ids) else "?"
+        if tbl == "Glazing":
+            rec = final_glz.get(nid, {})
+            new_u.append(f"#{nid}「{ch['Name']}」:模型裡讀回 U {rec.get('U-Value', '?')}、SHGC {rec.get('TransSolar', '?')}")
+            continue
+        rec = final_cons.get(nid)
         u = dblibrary.construction_u_row(rec)[0] if rec else None
-        new_u.append(f"#{new_ids[i] if i < len(new_ids) else '?'}「{ch['Name']}」:模型裡讀回算得 U {_u(u)}")
+        new_u.append(f"#{nid}「{ch['Name']}」:模型裡讀回算得 U {_u(u)}")
     saved = any(r[0] == "save" and r[1] == "True" for r in rows)
     lines += ["", f"### 寫入結果({secs} 秒)", "",
-              f"- 建築層級寫入 {len(resolved)} 項屬性" + (f",新增 {len(new_ids)} 個構造" if copies else "") +
+              f"- 建築層級寫入 {len(resolved)} 項屬性" + (f",新增 {len(new_ids)} 筆構造或玻璃" if copies else "") +
               f";存檔:{'成功' if saved else '**失敗**'}。",
               f"- 讀回核對:{'全部一致' if not mismatch else f'**{len(mismatch)} 項不一致**'}。"]
     lines += [f"  - {m}" for m in (problems + mismatch)[:20]]
@@ -1162,6 +1186,81 @@ def db_assign_construction(dsb_path: str, climate_zone: str = "4A", building_typ
     lines += [f"  - {m}" for m in overrides[:20]]
     lines.append(f"\n修改後的模型副本:`{dsb}`(用 `db_open` 打開檢查)")
     return "\n".join(lines)
+
+
+def _hvac_info(b):
+    """建築屬性(讀回)→ 換算燃料用的效率與燃料。"""
+    def f(k):
+        try:
+            return float(b.get(k, ""))
+        except ValueError:
+            return None
+    tmpl = dblibrary.table("HVACTemplates").get(b.get("HVACTemplateId", ""), {})
+    return {"template_id": b.get("HVACTemplateId", ""), "template": tmpl.get("Name", ""),
+            "heating_on": b.get("HeatingOn") == "1", "cooling_on": b.get("ActiveCoolingOn") == "1",
+            "mech_vent_on": b.get("MechanicalVentilationOn") == "1", "nat_vent_on": b.get("NaturalVentilationOn") == "1",
+            "heating_fuel": dblibrary.fuel(b.get("BoilerFuel")), "heating_scop": f("SCoPFrac"),
+            "cooling_fuel": "電", "cooling_sseer": f("SSEERFrac"),
+            "dhw_fuel": dblibrary.fuel(b.get("DHWFuelType"), "dhw"), "dhw_cop": f("DHWCoP")}
+
+
+def assign_hvac(dsb_path, system=None, apply=False):
+    """讀模型目前的空調設定; system 有給且 apply 時改成該範本。回傳 (說明文字, 生效的設定 dict)。"""
+    tmpl = dblibrary.hvac_template(system) if system else None
+    want = dict(dblibrary.hvac_attributes(tmpl)) if tmpl else {}
+    if tmpl:
+        want["HVACTemplateId"] = tmpl["Id"]
+    keys = sorted(set(want) | set(dblibrary.HVAC_READ))
+    dsb = _working_copy(dsb_path)
+    job = [("bdump", ",".join(keys))]
+    if apply and want:
+        job += [("bset", k, v) for k, v in want.items()] + [("bdump", ",".join(keys)), ("save",)]
+    rows, secs = _bridge(dsb, job)
+    blds = _buildings(rows) or [{}]
+    before, after = _hvac_info(blds[0]), _hvac_info(blds[-1])
+
+    def desc(h):
+        heat = (f"{h['heating_fuel']},季節效率 {h['heating_scop']:g}" if h["heating_on"] and h["heating_scop"]
+                else "關")
+        cool = f"電,季節效率 {h['cooling_sseer']:g}" if h["cooling_on"] and h["cooling_sseer"] else "關"
+        vent = "機械新風" if h["mech_vent_on"] else ("自然通風" if h["nat_vent_on"] else "無")
+        return (f"{h['template'] or '#' + h['template_id']}(#{h['template_id']}):供暖 {heat};供冷 {cool};"
+                f"通風 {vent};熱水 {h['dhw_fuel']},效率 {h['dhw_cop'] if h['dhw_cop'] is not None else '?'}")
+
+    lines = [f"## 空調系統{'(已寫入)' if apply and want else ''}:{dsb.stem}", "", f"- 目前:{desc(before)}"]
+    if tmpl:
+        lines.append(f"- 改成:DB 範本 #{tmpl['Id']}「{tmpl['Name']}」,寫入 {len(want)} 項建築屬性")
+    if not (apply and want):
+        if tmpl:
+            lines.append("確認無誤後,用同樣參數加上 apply=True 寫入。")
+        return "\n".join(lines), before
+    mismatch = [f"{k}:應為 {v},讀回 {blds[-1].get(k, '(沒讀到)')}" for k, v in want.items()
+                if not _same(blds[-1].get(k, ""), v)]
+    problems = [f"第 {r[1]} 行:{' '.join(r[2:])}" for r in rows if r[0] in ("lineerror", "norec")]
+    saved = any(r[0] == "save" and r[1] == "True" for r in rows)
+    lines += ["", f"### 寫入結果({secs} 秒)", "", f"- 現在:{desc(after)}",
+              f"- 存檔:{'成功' if saved else '**失敗**'};讀回核對:"
+              f"{'全部一致' if not mismatch else f'**{len(mismatch)} 項不一致**'}。"]
+    lines += [f"  - {m}" for m in (problems + mismatch)[:20]]
+    return "\n".join(lines), after
+
+
+@mcp.tool()
+def db_assign_hvac(dsb_path: str, system: str = "", apply: bool = False) -> str:
+    """看或換整棟建築的空調系統(DB 簡易空調範本)。EnergyPlus 以理想負載算冷熱需求, 用範本的季節效率換算成
+    電與天然氣(和 DB 結果畫面同一算法); 換範本會一起改新風、自然通風、熱回收等設定, 冷熱需求也可能跟著變。
+
+    Args:
+        dsb_path: .dsb 的完整路徑(操作的是副本)
+        system: 留空只讀目前設定; 或選: 風機盤管＋冷機＋燃氣鍋爐、VAV 中央空調＋冷機＋燃氣鍋爐、箱型機 Packaged DX(全電)、
+            分離式冷氣＋新風(全電)、VRF 多聯機＋新風(全電)、PTHP 壁掛熱泵(全電,無新風)、暖氣片＋燃氣鍋爐(無冷氣,自然通風),
+            也可以給 DB 空調範本的完整名稱
+        apply: False(預設)只預覽; True 寫入、存檔並讀回核對
+    """
+    try:
+        return assign_hvac(dsb_path, system or None, apply)[0]
+    except KeyError as e:
+        raise ValueError(str(e).strip("'\""))
 
 
 # ---- 參數建模: 量體 → dsbXML → 匯入帶 DbMcpBridge 的模板 → 新的 .dsb ----
@@ -1324,7 +1423,7 @@ def db_open(path: str) -> str:
 
 JOB_DIR = WORK / "_jobs"
 LONG_TOOLS = ("db_workflow", "db_build_model", "db_simulate", "db_assign_activity", "db_assign_schedule", "db_assign_construction",
-              "db_set_location", "db_zones", "db_inspect", "db_calculate", "db_update_bridge")
+              "db_assign_hvac", "db_set_location", "db_zones", "db_inspect", "db_calculate", "db_update_bridge")
 _job_queue: "queue.Queue[str]" = queue.Queue()
 _job_lock = threading.Lock()
 _job_worker = None

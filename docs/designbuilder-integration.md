@@ -10,7 +10,7 @@ The user builds and edits models in DesignBuilder. An AI assistant (through the 
 
 | Component | File | Role |
 |---|---|---|
-| DesignBuilder MCP server | [tools/designbuilder_mcp/server.py](../tools/designbuilder_mcp/server.py) | Twenty-one tools that drive DesignBuilder through the official [db-process](https://github.com/DesignBuilderSoftware/db-process) command line (`/process=`) |
+| DesignBuilder MCP server | [tools/designbuilder_mcp/server.py](../tools/designbuilder_mcp/server.py) | Twenty-two tools that drive DesignBuilder through the official [db-process](https://github.com/DesignBuilderSoftware/db-process) command line (`/process=`) |
 | Command-line runner | [tools/designbuilder_mcp/cli.py](../tools/designbuilder_mcp/cli.py) | The same chain without an assistant: simulate a `.dsb`, then run the measures report |
 | Desktop app | [tools/app/app.py](../tools/app/app.py) | Pick a `.dsb` / `.idf`, or enter a few building parameters, choose weather, run, open the report |
 | Engine adapter | [tools/dbengine/](../tools/dbengine/) | Makes DesignBuilder's bundled EnergyPlus usable from the command line (see below) |
@@ -38,8 +38,9 @@ All operations work on a copy of the user's model in `db_models/dbmcp/<model>/`;
 | `db_set_location` | Applies a library location to the model: coordinates, time zone, elevation, climate zone, design conditions and hourly weather file (343 site attributes). A weather file that is not on this computer can be supplied as an EPW, which is checked against the location's coordinates | Yes (headless) | Yes (2026-11-27) |
 | `db_find_schedules` | Searches DesignBuilder's schedule library by name and shows each schedule's weekday, Saturday and Sunday profile | No | Yes (2026-11-26) |
 | `db_assign_schedule` | Assigns existing library schedules (occupancy, lighting, equipment, hot water) to zones: preview, then write, save and read back. It never creates new schedules | Yes (headless) | Yes (2026-11-26) |
-| `db_assign_construction` | Applies the ASHRAE 90.1-2019 baseline constructions for a climate zone (default 4A) and building type at building level: walls, roofs, exposed and ground floors, doors, glazing, internal constructions and infiltration. An optional target U for walls, roofs or exposed floors adds a copy of the baseline construction with a thicker or thinner insulation layer | Yes (headless) | Yes (2026-11-26) |
-| `db_workflow` | The whole chain for the Dify form workflow: new model from parameters (or an existing `.dsb`) → location → ASHRAE baseline constructions → annual simulation → retrofit measures, returned as structured JSON | Yes (headless) | Yes (2026-11-27) |
+| `db_assign_construction` | Applies the ASHRAE 90.1-2019 baseline constructions for a climate zone (default 4A) and building type at building level: walls, roofs, exposed and ground floors, doors, glazing, internal constructions and infiltration. An optional target U for walls, roofs or exposed floors adds a copy of the baseline construction with a thicker or thinner insulation layer; an optional window U and SHGC adds a copy of the baseline glazing (simple definition) | Yes (headless) | Yes (2026-11-26; window U and SHGC 2026-11-27) |
+| `db_assign_hvac` | Reads or replaces the building's simple-HVAC template (seven library systems: fan coil, VAV, packaged DX, split + ventilation, VRF, PTHP, radiators). Writes the template's values (efficiencies, fuel, ventilation, heat recovery) at building level, then reads them back | Yes (headless) | Yes (2026-11-27) |
+| `db_workflow` | The whole chain for the Dify form workflow: new model from parameters (or an existing `.dsb`) → location → ASHRAE baseline constructions, with any measured U / SHGC values the user has → HVAC system → annual simulation → delivered electricity and gas → retrofit measures, returned as structured JSON | Yes (headless) | Yes (2026-11-27) |
 | `db_job_start` / `db_job_status` | Run any of the DesignBuilder tools above as a background job and check on it; jobs run one at a time and their results are kept on disk | — | Yes (2026-11-27) |
 | `db_update_bridge` | Replaces an installed DbMcpBridge script inside a model with the repository version, without opening DesignBuilder's user interface, then runs a test job | Optional test (headless) | Yes (2026-11-26) |
 
@@ -155,6 +156,8 @@ Every problem below came up while building and testing the tools on DesignBuilde
 - Weather files that are not on this computer must be downloaded in DesignBuilder or supplied as an EPW file; the tools do not download them. Without `location`, new models keep the template's location (San Francisco).
 - Results stored inside the `.dsb` (design loads, daylighting, CFD) cannot be read, and `db_calculate` has not been tested.
 - `db_results` writes CSV only (no `.xlsx`).
+- HVAC is DesignBuilder's simple HVAC: EnergyPlus models ideal loads, and `db_workflow` converts heating, cooling and hot-water demand to electricity and gas with the template's seasonal efficiencies, as DesignBuilder's own results screen does. Fans and pumps are not modelled. The efficiencies are DesignBuilder's library defaults, not measured or code values. Detailed HVAC (licensed) is not automated yet.
+- Envelope levels other than the ASHRAE 90.1-2019 Appendix G baseline are not built in, because the prescriptive tables of the standard are not freely available. Users with project data enter U-values and SHGC directly.
 - The Dify DSL file has not yet been imported into Dify; its format differs between Dify versions, and [dify/README.md](../dify/README.md) describes how to build the same workflow by hand.
 - The bundled engine has no IDF version updater, so IDFs older than 23.1 must be re-exported from DesignBuilder.
 
