@@ -21,6 +21,9 @@ def main():
     sys.stdout = sys.stderr = log  # DB 帶起來時沒有主控台
     if epw and Path(epw).exists():
         os.environ["EPW"] = epw  # batch_driver 在 import 時讀, 要先設
+    hvac = idf.parent / "hvac.json"  # db_simulate 存的模型空調設定: 理想負載用同一組效率換算(scan2.ideal_hvac)
+    if hvac.exists():
+        os.environ["IDEAL_HVAC"] = str(hvac)
     sys.path.insert(0, str(WS))
     try:
         import db_import

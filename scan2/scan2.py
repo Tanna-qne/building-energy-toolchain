@@ -34,8 +34,46 @@ COSTS = json.loads((Path(__file__).resolve().parent.parent / "costs.json").read_
 COOLROOF_SOLAR_ABS = 0.3  # 反射塗料後屋頂外層的日射吸收率(一般深色屋頂約 0.7)
 EQUIP_FACTOR = 0.8        # 節能設備: 插座 / 設備用電功率 ×0.8
 
-IDEAL_COOL_COP = 3.0   # 理想負載換算: 冷氣(電)的 COP, 假設值
-IDEAL_HEAT_EFF = 0.85  # 理想負載換算: 暖氣與熱水用瓦斯鍋爐的效率, 假設值
+IDEAL_COOL_COP = 3.0   # 理想負載換算: 冷氣(電)的 COP, 假設值(模型沒有提供空調設定時才用)
+IDEAL_HEAT_EFF = 0.85  # 理想負載換算: 暖氣與熱水用瓦斯鍋爐的效率, 假設值(同上)
+
+
+def ideal_hvac():
+    """理想負載換算用的效率與燃料。DesignBuilder MCP 的 db_simulate 會把模型的簡易空調設定存成 hvac.json,
+    from_db.py 用環境變數 IDEAL_HVAC 指過來; 這樣節能措施和工作流前面的報告用同一組數字。沒有就用上面的假設值。"""
+    cfg = {"heating_fuel": "天然氣", "heating_eff": IDEAL_HEAT_EFF, "cooling_cop": IDEAL_COOL_COP,
+           "dhw_fuel": "天然氣", "dhw_eff": IDEAL_HEAT_EFF, "source": "假設值"}
+    path = os.environ.get("IDEAL_HVAC", "")
+    if path and Path(path).exists():
+        h = json.loads(Path(path).read_text(encoding="utf-8"))
+        if h.get("heating_scop"):
+            cfg.update(heating_fuel=h.get("heating_fuel") or "天然氣", heating_eff=float(h["heating_scop"]))
+        if h.get("cooling_sseer"):
+            cfg["cooling_cop"] = float(h["cooling_sseer"])
+        if h.get("dhw_cop"):
+            cfg.update(dhw_fuel=h.get("dhw_fuel") or "天然氣", dhw_eff=float(h["dhw_cop"]))
+        cfg["source"] = f"模型的空調範本「{h.get('template') or h.get('template_id', '')}」"
+    return cfg
+
+
+def better_eff(fuel, eff):
+    """「高效率空調」措施在理想負載上的換算效率: 冷氣與熱泵 ×1.25; 燃氣鍋爐提到 95%; 電熱(效率 1)不變。"""
+    if fuel == "天然氣":
+        return max(eff, 0.95)
+    return eff * 1.25 if eff > 1.0 else eff
+
+
+def to_fuels(cool, heat_space, heat_dhw, cfg, cool_cop=None, heat_eff=None):
+    """理想負載的冷 / 熱(kWh)→ (電, 天然氣)。"""
+    elec = cool / (cool_cop or cfg["cooling_cop"])
+    gas = 0.0
+    for load, fuel, eff in ((heat_space, cfg["heating_fuel"], heat_eff or cfg["heating_eff"]),
+                            (heat_dhw, cfg["dhw_fuel"], cfg["dhw_eff"])):
+        if fuel == "電":
+            elec += load / eff
+        else:
+            gas += load / eff
+    return elec, gas
 FILM_SHGC = 0.30       # 貼膜後的 SHGC
 FILM_SKIP_SHGC = 0.35  # 原窗 SHGC 已經不高於這個值就不貼, 效果有限
 
@@ -155,7 +193,7 @@ def run(client, idf: Path):
     payload = parse(client.tool("run_energyplus_simulation", sim_args(idf), 900))
     elec = gas = None
     district = ""
-    cool = heat = 0.0
+    cool = heat = dhw = 0.0
     out_dir = payload.get("output_directory")
     if payload.get("success") and out_dir:
         od = Path(out_dir)
@@ -164,20 +202,26 @@ def run(client, idf: Path):
         if elec is not None:
             gas = meter_kwh(od, "NaturalGas:Facility") or 0.0
             # 理想負載(DesignBuilder 的簡化空調)只算出要供應多少冷 / 熱, 記在 District 電表, 不是耗能;
-            # 用假設的設備效率換成電與天然氣, 否則空調能耗整個漏掉
+            # 用設備效率換成電與天然氣, 否則空調能耗整個漏掉
             cool = meter_kwh(od, "DistrictCooling:Facility") or 0.0
             heat = (meter_kwh(od, "DistrictHeatingWater:Facility") or 0.0) + \
                 (meter_kwh(od, "DistrictHeatingSteam:Facility") or 0.0) + \
                 (meter_kwh(od, "DistrictHeating:Facility") or 0.0)  # 23.1 的名稱
+            # 熱水與暖氣的設備不同(效率、燃料), 用分項電表拆開; 讀不到分項時全部當暖氣
+            # meter_kwh 是子字串比對: 這個名稱同時對到 23.1 的 ...DistrictHeating 與新版的 ...DistrictHeatingWater
+            dhw = min(heat, meter_kwh(od, "WaterSystems:DistrictHeating") or 0.0)
             if cool or heat:
-                elec = round(elec + cool / IDEAL_COOL_COP, 1)
-                gas = round(gas + heat / IDEAL_HEAT_EFF, 1)
-                # 記在 District 的可能是 DesignBuilder 的理想負載空調, 也可能只是熱水系統, 所以不說是哪一種
-                parts = [f"{cool:,.0f} 度冷量以冷氣 COP {IDEAL_COOL_COP:g} 換成用電" if cool else "",
-                         f"{heat:,.0f} 度熱量(暖氣或熱水)以瓦斯鍋爐效率 {IDEAL_HEAT_EFF:.0%} 換成天然氣" if heat else ""]
-                district = "模型有部分冷 / 熱是用「區域能源」表示,沒有實際設備:" + "、".join(p for p in parts if p)
+                cfg = ideal_hvac()
+                e2, g2 = to_fuels(cool, heat - dhw, dhw, cfg)
+                elec, gas = round(elec + e2, 1), round(gas + g2, 1)
+                parts = [f"{cool:,.0f} 度冷量以冷氣效率 {cfg['cooling_cop']:g} 換成用電" if cool else "",
+                         f"{heat - dhw:,.0f} 度暖氣以{cfg['heating_fuel']}、效率 {cfg['heating_eff']:g} 換算"
+                         if heat - dhw else "",
+                         f"{dhw:,.0f} 度熱水以{cfg['dhw_fuel']}、效率 {cfg['dhw_eff']:g} 換算" if dhw else ""]
+                district = (f"模型的空調是理想負載(只算冷熱需求),依{cfg['source']}的效率換算:" +
+                            "、".join(p for p in parts if p))
     return {"success": bool(payload.get("success")), "elec": elec, "gas": gas, "district": district,
-            "cool_dist": cool, "heat_dist": heat,
+            "cool_dist": cool, "heat_dist": heat, "dhw_dist": dhw,
             "seconds": round(time.time() - started, 1), "out_dir": out_dir,
             "error": (payload.get("error") or "")[:100]}
 
@@ -225,12 +269,19 @@ def retrofit_measures(client, name, src: Path, base, models_dir: Path):
         note = "、".join(f"{k} {c['old']:.2f} → {c['new']:.2f}" for k, c in seen.items())
         out.append(("hvac_eff", run(client, path), note))
     elif base.get("success") and (base.get("cool_dist") or base.get("heat_dist")):
-        # 理想負載沒有實際設備: 換算用的冷氣 COP 與鍋爐效率提高, 不必另跑模擬
-        cool, heat = base["cool_dist"], base["heat_dist"]
-        res = dict(base, elec=round(base["elec"] - cool / IDEAL_COOL_COP + cool / (IDEAL_COOL_COP * 1.25), 1),
-                   gas=round(base["gas"] - heat / IDEAL_HEAT_EFF + heat / 0.95, 1), seconds=0, error="")
-        out.append(("hvac_eff", res, f"理想負載沒有實際設備,改用換算效率:冷氣 COP {IDEAL_COOL_COP:g} → "
-                                     f"{IDEAL_COOL_COP * 1.25:g}、鍋爐效率 {IDEAL_HEAT_EFF:.0%} → 95%"))
+        # 理想負載沒有實際設備: 換算用的空調效率提高, 不必另跑模擬(熱水設備不在這個措施裡)
+        cfg = ideal_hvac()
+        cool, dhw = base["cool_dist"], base.get("dhw_dist", 0.0)
+        space = base["heat_dist"] - dhw
+        new_cop = round(cfg["cooling_cop"] * 1.25, 2)
+        new_heat = round(better_eff(cfg["heating_fuel"], cfg["heating_eff"]), 2)
+        e0, g0 = to_fuels(cool, space, dhw, cfg)
+        e1, g1 = to_fuels(cool, space, dhw, cfg, cool_cop=new_cop, heat_eff=new_heat)
+        res = dict(base, elec=round(base["elec"] - e0 + e1, 1), gas=round(base["gas"] - g0 + g1, 1), seconds=0, error="")
+        heat_note = (f"暖氣({cfg['heating_fuel']})效率 {cfg['heating_eff']:g} → {new_heat:g}"
+                     if new_heat != cfg["heating_eff"] else f"暖氣({cfg['heating_fuel']})效率 {cfg['heating_eff']:g} 不變")
+        out.append(("hvac_eff", res, f"理想負載沒有實際設備,改用換算效率:冷氣效率 {cfg['cooling_cop']:g} → "
+                                     f"{new_cop:g}、{heat_note}"))
     else:
         out.append(("hvac_eff", failed("找不到可以提高效率的空調設備(或效率欄位是自動計算)"), ""))
     return out

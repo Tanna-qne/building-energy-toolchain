@@ -106,7 +106,10 @@ def prepare(client, src: Path, name: str):
                   # District 兩項給理想負載的模型用(DesignBuilder 預設的簡化空調), scan2.run() 會換算成電與氣
                   "meters": [["Electricity:Facility", "RunPeriod"], ["NaturalGas:Facility", "RunPeriod"],
                              ["DistrictCooling:Facility", "RunPeriod"], ["DistrictHeatingWater:Facility", "RunPeriod"],
-                             ["DistrictHeating:Facility", "RunPeriod"]]},  # 後者是 23.1 的名稱; 不存在的電表只會警告
+                             ["DistrictHeating:Facility", "RunPeriod"],  # 後者是 23.1 的名稱; 不存在的電表只會警告
+                             # 熱水另外拆出來: 熱水和暖氣的設備效率、燃料可能不同
+                             ["WaterSystems:DistrictHeating", "RunPeriod"],
+                             ["WaterSystems:DistrictHeatingWater", "RunPeriod"]]},
                  WORK / f"{name}__ready.idf")
     return step or work
 

@@ -325,7 +325,8 @@ def db_simulate(dsb_path: str, attributes: Optional[dict] = None, start_date: st
         # 所以先用一次短作業開啟並存檔(約 1 分鐘)
         _bridge(dsb, [("sset", "HourlyOutput", "1"), ("save",)])
     if bridge:
-        job = _write_job(dsb, [("sdump", OUTPUT_KEYS), ("handles",)])
+        job = _write_job(dsb, [("sdump", OUTPUT_KEYS), ("handles",), ("bdump", ",".join(dblibrary.HVAC_READ)),
+                               ("hvacinfo",)])
         os.environ["DBMCP_JOB"] = str(job)
     try:
         report = _simulate(dsb_path, dsb, attributes, start_date, end_date, timeout_s)
@@ -337,6 +338,12 @@ def db_simulate(dsb_path: str, attributes: Optional[dict] = None, start_date: st
     if rows:
         zmap = {r[1]: {"block": r[2], "zone": r[3], "idf": r[4]} for r in rows if r[0] == "handle"}
         (out / "zones.json").write_text(json.dumps(zmap, ensure_ascii=False, indent=1), encoding="utf-8")
+        # 模型的空調設定: 節能措施(scan2)換算理想負載時用同一組效率與燃料, 和工作流前面的報告一致
+        b = next((dict(c.split("=", 1) for c in r[1:] if "=" in c) for r in rows if r[0] == "building"), None)
+        if b:
+            hv = _hvac_info(b)
+            hv["network"] = _hvac_network(rows)
+            (out / "hvac.json").write_text(json.dumps(hv, ensure_ascii=False, indent=1), encoding="utf-8")
         site = next((dict(c.split("=", 1) for c in r[1:]) for r in rows if r[0] == "site"), {})
         on = [k.replace("Output", "") for k in OUTPUT_KEYS.split(",") if site.get(k) == "1"]
         notes.append(f"輸出頻率:{'、'.join(on) or '只有全年'}" + ("(這次開啟了逐時輸出,模型副本會保留這個設定)" if hourly else ""))
