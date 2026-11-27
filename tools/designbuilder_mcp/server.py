@@ -17,10 +17,13 @@ E+ 的 Transition(版本升級)會當掉(HANDOVER 坑 18), 節能報告就跑不
 import csv
 import json
 import os
+import queue
 import re
+import secrets
 import shutil
 import site
 import subprocess
+import threading
 import sys
 import time
 import xml.etree.ElementTree as ET
@@ -91,8 +94,24 @@ def _check_idle():
         raise RuntimeError("DesignBuilder 正在執行。DB 一次只能開一個: 請使用者先存檔並關掉 DB, 再呼叫這個工具。")
 
 
+# HTTP 模式(http_server.py, 給 Dify 用)時, 檔案路徑只能在這些資料夾底下: token 外流也讀不到其他檔案。
+# DBMCP_ALLOWED_DIRS 用分號分隔, 例如放使用者模型的資料夾
+HTTP_MODE = os.environ.get("DBMCP_HTTP") == "1"
+ALLOWED_DIRS = [WORK] + [Path(p) for p in os.environ.get("DBMCP_ALLOWED_DIRS", "").split(";") if p.strip()]
+
+
+def _guard(path) -> Path:
+    p = Path(path)
+    if HTTP_MODE:
+        r = p.resolve()
+        if not any(r == d.resolve() or d.resolve() in r.parents for d in ALLOWED_DIRS):
+            raise ValueError(f"HTTP 模式只能使用這些資料夾裡的檔案:{'; '.join(str(d) for d in ALLOWED_DIRS)}"
+                             "(要加資料夾,啟動時設定 DBMCP_ALLOWED_DIRS)")
+    return p
+
+
 def _working_copy(dsb_path: str) -> Path:
-    src = Path(dsb_path)
+    src = _guard(dsb_path)
     if src.suffix.lower() != ".dsb" or not src.exists():
         raise ValueError(f"找不到 .dsb 檔: {dsb_path}")
     # E+ 與 DB 對非 ASCII 路徑不穩, 工作副本用 ASCII 名稱
@@ -345,7 +364,7 @@ def db_results(output_dir: str, items: list, freq: str = "hourly", zones: Option
         freq: hourly(預設)/ daily / monthly
         zones: 熱區類項目只取這些熱區或區塊(例如 ["F01", "F02 Core"]); 不給或 "*" 為全部
     """
-    sim = Path(output_dir)
+    sim = _guard(output_dir)
     if not (sim / "eplusout.eso").exists():
         raise ValueError(f"{sim} 裡沒有 eplusout.eso;請給 db_simulate 回傳的輸出資料夾")
     zmap_file = sim / "zones.json"
@@ -459,7 +478,7 @@ def db_measures_report(output_dir: str) -> str:
         output_dir: db_simulate 回傳的 output_dir
     Returns: 報告會出現的位置; 用 db_report_status 查進度。
     """
-    d = Path(output_dir)
+    d = _guard(output_dir)
     if not (d / "in.idf").exists():
         raise ValueError(f"{d} 沒有 in.idf; 先用 db_simulate 跑一次")
     for old in ("run.log", "report.html", "report.md", "results.csv"):  # 不然 db_report_status 會讀到上次的結果
@@ -478,7 +497,7 @@ def db_measures_report(output_dir: str) -> str:
 @mcp.tool()
 def db_report_status(output_dir: str) -> str:
     """查 db_measures_report 的進度。完成時回傳每個措施的省能 %、年省金額與回本年數。"""
-    d = Path(output_dir)
+    d = _guard(output_dir)
     log = (d / "run.log").read_text(encoding="utf-8", errors="replace") if (d / "run.log").exists() else ""
     if "完成" not in log:
         tail = "\n".join(f"    {ln}" for ln in log.strip().splitlines()[-5:]) or "    (還沒有輸出)"
@@ -835,7 +854,7 @@ def db_set_location(dsb_path: str, location: str, epw_path: str = "", apply: boo
         raise ValueError(f"地點「{loc['LocationName']}」在 DB 庫裡沒有對應的逐時氣象檔")
     epw_note = ""
     if not local and epw_path:
-        src = Path(epw_path)
+        src = _guard(epw_path)
         if not src.exists() or src.suffix.lower() != ".epw":
             raise ValueError(f"找不到 EPW 檔 {epw_path}")
         head = dblibrary.epw_location(src)
@@ -1211,7 +1230,7 @@ def db_build_model(params: dict, template_dsb: str = "", location: str = "") -> 
     except KeyError as e:
         raise ValueError(str(e).strip("'\""))
     if template_dsb:
-        src = Path(template_dsb)
+        src = _guard(template_dsb)
         if not src.exists():
             raise ValueError(f"找不到模板 {template_dsb}")
         if BRIDGE_MARKER not in zipfile.ZipFile(src).read(zipfile.ZipFile(src).infolist()[0]):
@@ -1298,6 +1317,100 @@ def db_open(path: str) -> str:
         raise ValueError(f"找不到 {path}")
     _launch(f'"{path}"')
     return "已在 DesignBuilder 打開"
+
+
+# ---- 背景工作: 開 DB 的工具要 1–5 分鐘, 比 Dify 等工具回應的時間長; 先回工作編號, 再查進度 ----
+# DB 一次只能開一個, 所以用一個工作執行緒依序跑; 結果另存 JSON, 伺服器重開後仍查得到
+
+JOB_DIR = WORK / "_jobs"
+LONG_TOOLS = ("db_workflow", "db_build_model", "db_simulate", "db_assign_activity", "db_assign_schedule", "db_assign_construction",
+              "db_set_location", "db_zones", "db_inspect", "db_calculate", "db_update_bridge")
+_job_queue: "queue.Queue[str]" = queue.Queue()
+_job_lock = threading.Lock()
+_job_worker = None
+
+
+def _job_file(job_id):
+    return JOB_DIR / f"{job_id}.json"
+
+
+def _job_save(job):
+    JOB_DIR.mkdir(parents=True, exist_ok=True)
+    tmp = _job_file(job["id"]).with_suffix(".tmp")
+    tmp.write_text(json.dumps(job, ensure_ascii=False, indent=1), encoding="utf-8")
+    tmp.replace(_job_file(job["id"]))
+
+
+def _job_run():
+    while True:
+        job_id = _job_queue.get()
+        job = json.loads(_job_file(job_id).read_text(encoding="utf-8"))
+        job.update(status="running", started=datetime.now().isoformat(timespec="seconds"))
+        _job_save(job)
+        try:
+            job["result"] = globals()[job["tool"]](**job["arguments"])
+            job["status"] = "done"
+        except Exception as e:  # 工具的錯誤訊息原樣交給使用者(例如 DB 停在對話框、參數錯誤)
+            job.update(status="failed", error=f"{type(e).__name__}: {e}")
+        job["finished"] = datetime.now().isoformat(timespec="seconds")
+        _job_save(job)
+
+
+@mcp.tool()
+def db_workflow(form: dict) -> dict:
+    """完整流程(Dify 表單工作流用, 請經 db_job_start 在背景跑): 新建模型或分析既有模型 → 地點與氣象檔 →
+    ASHRAE 2019 基準構造 → 年度模擬 → 節能措施與回本, 回傳結構化結果。新建約 6–8 分鐘, 加節能措施再 5–10 分鐘。
+
+    Args:
+        form: 表單欄位(字串): mode(新建模型 / 分析既有模型)、location(地點編號或關鍵字)、run_measures(是 / 否)、
+            building_type(非住宅 / 住宅 / 半空調);新建: name, shape(rect / L / U / T / courtyard / podium_tower), width,
+            depth, stories, floor_height, wwr, uses(「1:大廳; 2-:辦公」), default_use, 形狀需要的 notch_width / notch_depth /
+            stem_width / bar_depth / court_width / court_depth, 裙樓加塔樓另給 tower_width / tower_depth / tower_stories;
+            既有: dsb_path, apply_constructions(是 / 否)
+    """
+    import workflow  # 這裡才載入: workflow 也 import server
+    return workflow.run(form)
+
+
+@mcp.tool()
+def db_job_start(tool: str, arguments: dict) -> dict:
+    """在背景執行一個要開 DesignBuilder 的工具, 立刻回傳工作編號; 用 db_job_status 查進度與結果。
+    Dify 等會限制工具等待時間的環境, 請用這個代替直接呼叫下列工具(每個要 1–5 分鐘):
+    db_build_model、db_simulate、db_assign_activity、db_assign_schedule、db_assign_construction、
+    db_set_location、db_zones、db_inspect、db_calculate、db_update_bridge。
+
+    Args:
+        tool: 工具名稱(上面其中之一)
+        arguments: 該工具的參數, 和直接呼叫時一樣, 例如 {"dsb_path": "...", "hourly": true}
+    """
+    global _job_worker
+    if tool not in LONG_TOOLS:
+        raise ValueError(f"db_job_start 只接受:{'、'.join(LONG_TOOLS)};其他工具請直接呼叫")
+    job_id = f"{datetime.now():%Y%m%d_%H%M%S}_{secrets.token_hex(3)}"
+    job = {"id": job_id, "tool": tool, "arguments": arguments, "status": "queued",
+           "queued": datetime.now().isoformat(timespec="seconds")}
+    _job_save(job)
+    with _job_lock:
+        if _job_worker is None or not _job_worker.is_alive():
+            _job_worker = threading.Thread(target=_job_run, daemon=True, name="db-jobs")
+            _job_worker.start()
+    _job_queue.put(job_id)
+    return {"job_id": job_id, "status": "queued", "ahead": _job_queue.qsize() - 1,
+            "note": "用 db_job_status 查進度;通常 1–5 分鐘"}
+
+
+@mcp.tool()
+def db_job_status(job_id: str) -> dict:
+    """查背景工作的狀態: queued(排隊中)/ running(執行中)/ done(完成, result 是工具的輸出)/
+    failed(失敗, error 是原因)。"""
+    if not re.fullmatch(r"[0-9_a-f]+", job_id) or not _job_file(job_id).exists():
+        raise ValueError(f"找不到工作 {job_id}")
+    job = json.loads(_job_file(job_id).read_text(encoding="utf-8"))
+    if job["status"] == "running":
+        job["elapsed_s"] = round((datetime.now() - datetime.fromisoformat(job["started"])).total_seconds())
+    if job["status"] in ("queued", "running"):
+        job["note"] = "還沒完成,稍後再查"
+    return job
 
 
 if __name__ == "__main__":

@@ -1,0 +1,732 @@
+app:
+  description: 填表 → 在 DesignBuilder 建模(或分析既有模型)→ 地點與 ASHRAE 構造 → 年度模擬 → 節能措施與回本 → DeepSeek 寫白話報告。數值全部來自 DesignBuilder 範本庫與 EnergyPlus 模擬,AI 只負責寫報告。
+  icon: 🏢
+  icon_background: '#E0F2FE'
+  mode: workflow
+  name: 建築能耗分析(DesignBuilder)
+  use_icon_as_answer_icon: false
+kind: app
+version: 0.3.0
+workflow:
+  conversation_variables: []
+  environment_variables:
+  - description: DesignBuilder MCP 的網址(通道給的 https 網址,不含 /api)
+    id: env-url
+    name: DBMCP_URL
+    selector:
+    - env
+    - DBMCP_URL
+    value: https://your-tunnel.example.com
+    value_type: string
+  - description: db_models/dbmcp/_http_token.txt 裡的 token
+    id: env-token
+    name: DBMCP_TOKEN
+    selector:
+    - env
+    - DBMCP_TOKEN
+    value: ''
+    value_type: secret
+  features:
+    file_upload:
+      enabled: false
+    opening_statement: ''
+    retriever_resource:
+      enabled: false
+    sensitive_word_avoidance:
+      enabled: false
+    speech_to_text:
+      enabled: false
+    suggested_questions: []
+    suggested_questions_after_answer:
+      enabled: false
+    text_to_speech:
+      enabled: false
+  graph:
+    edges:
+    - id: start-form
+      source: start
+      sourceHandle: source
+      target: form
+      targetHandle: target
+      type: custom
+      data:
+        sourceType: start
+        targetType: code
+        isInLoop: false
+    - id: form-submit
+      source: form
+      sourceHandle: source
+      target: submit
+      targetHandle: target
+      type: custom
+      data:
+        sourceType: code
+        targetType: http-request
+        isInLoop: false
+    - id: submit-parse
+      source: submit
+      sourceHandle: source
+      target: parse_submit
+      targetHandle: target
+      type: custom
+      data:
+        sourceType: http-request
+        targetType: code
+        isInLoop: false
+    - id: parse-check
+      source: parse_submit
+      sourceHandle: source
+      target: check_submit
+      targetHandle: target
+      type: custom
+      data:
+        sourceType: code
+        targetType: if-else
+        isInLoop: false
+    - id: check-loop
+      source: check_submit
+      sourceHandle: 'true'
+      target: wait
+      targetHandle: target
+      type: custom
+      data:
+        sourceType: if-else
+        targetType: loop
+        isInLoop: false
+    - id: check-end-error
+      source: check_submit
+      sourceHandle: 'false'
+      target: end_rejected
+      targetHandle: target
+      type: custom
+      data:
+        sourceType: if-else
+        targetType: end
+        isInLoop: false
+    - id: loopstart-poll
+      source: wait_start
+      sourceHandle: source
+      target: poll
+      targetHandle: target
+      type: custom
+      zIndex: 1002
+      data:
+        sourceType: loop-start
+        targetType: http-request
+        isInLoop: true
+        loop_id: wait
+    - id: poll-parse
+      source: poll
+      sourceHandle: source
+      target: parse_poll
+      targetHandle: target
+      type: custom
+      zIndex: 1002
+      data:
+        sourceType: http-request
+        targetType: code
+        isInLoop: true
+        loop_id: wait
+    - id: parse-assign
+      source: parse_poll
+      sourceHandle: source
+      target: remember
+      targetHandle: target
+      type: custom
+      zIndex: 1002
+      data:
+        sourceType: code
+        targetType: assigner
+        isInLoop: true
+        loop_id: wait
+    - id: loop-result
+      source: wait
+      sourceHandle: source
+      target: result
+      targetHandle: target
+      type: custom
+      data:
+        sourceType: loop
+        targetType: code
+        isInLoop: false
+    - id: result-check
+      source: result
+      sourceHandle: source
+      target: check_result
+      targetHandle: target
+      type: custom
+      data:
+        sourceType: code
+        targetType: if-else
+        isInLoop: false
+    - id: check-report
+      source: check_result
+      sourceHandle: 'true'
+      target: report
+      targetHandle: target
+      type: custom
+      data:
+        sourceType: if-else
+        targetType: llm
+        isInLoop: false
+    - id: check-end-failed
+      source: check_result
+      sourceHandle: 'false'
+      target: end_failed
+      targetHandle: target
+      type: custom
+      data:
+        sourceType: if-else
+        targetType: end
+        isInLoop: false
+    - id: report-end
+      source: report
+      sourceHandle: source
+      target: end
+      targetHandle: target
+      type: custom
+      data:
+        sourceType: llm
+        targetType: end
+        isInLoop: false
+    nodes:
+    - id: start
+      type: custom
+      position:
+        x: 30
+        y: 300
+      data:
+        type: start
+        title: 表單
+        desc: 新建模型填量體;分析既有模型填 .dsb 路徑
+        variables:
+        - variable: mode
+          label: 做什麼
+          type: select
+          required: true
+          options:
+          - 新建模型
+          - 分析既有模型
+        - variable: location
+          label: 地點(DB 地點編號或英文城市名,例如 6541 或 Chicago O'Hare)
+          type: text-input
+          required: false
+          max_length: 64
+        - variable: building_type
+          label: 建築類型
+          type: select
+          required: true
+          options:
+          - 非住宅
+          - 住宅
+          - 半空調
+        - variable: run_measures
+          label: 跑節能措施與回本(多 5–10 分鐘)
+          type: select
+          required: true
+          options:
+          - 是
+          - 否
+        - variable: name
+          label: 模型名稱(英文、數字、底線;新建用)
+          type: text-input
+          required: false
+          max_length: 48
+        - variable: shape
+          label: 量體(新建用)
+          type: select
+          required: false
+          options:
+          - rect
+          - L
+          - U
+          - T
+          - courtyard
+          - podium_tower
+        - variable: width
+          label: 東西寬 m(裙樓加塔樓時為裙樓)
+          type: number
+          required: false
+        - variable: depth
+          label: 南北深 m(裙樓加塔樓時為裙樓)
+          type: number
+          required: false
+        - variable: stories
+          label: 層數(裙樓加塔樓時為裙樓層數)
+          type: number
+          required: false
+        - variable: uses
+          label: 各層用途,例如「1:大廳; 2-:辦公」(沒寫到的樓層用辦公)
+          type: text-input
+          required: false
+          max_length: 200
+        - variable: floor_height
+          label: 樓高 m(預設 3.6)
+          type: number
+          required: false
+        - variable: wwr
+          label: 窗牆比(0–1,預設 0.4)
+          type: number
+          required: false
+        - variable: notch_width
+          label: L / U 形挖掉的寬 m
+          type: number
+          required: false
+        - variable: notch_depth
+          label: L / U 形挖掉的深 m
+          type: number
+          required: false
+        - variable: stem_width
+          label: T 形直翼寬 m
+          type: number
+          required: false
+        - variable: bar_depth
+          label: T 形橫翼深 m
+          type: number
+          required: false
+        - variable: court_width
+          label: 回字形天井寬 m
+          type: number
+          required: false
+        - variable: court_depth
+          label: 回字形天井深 m
+          type: number
+          required: false
+        - variable: tower_width
+          label: 塔樓寬 m
+          type: number
+          required: false
+        - variable: tower_depth
+          label: 塔樓深 m
+          type: number
+          required: false
+        - variable: tower_stories
+          label: 塔樓層數
+          type: number
+          required: false
+        - variable: dsb_path
+          label: 既有模型路徑(.dsb,要在 MCP 允許的資料夾裡)
+          type: text-input
+          required: false
+          max_length: 256
+        - variable: apply_constructions
+          label: 既有模型也換成 ASHRAE 基準構造
+          type: select
+          required: false
+          options:
+          - 否
+          - 是
+    - id: form
+      type: custom
+      position:
+        x: 330
+        y: 300
+      data:
+        type: code
+        title: 整理表單
+        desc: 全部轉成字串,空的留空;檢查交給伺服器
+        code_language: python3
+        code: |
+          import json
+
+          def main(mode, location, building_type, run_measures, name, shape, width, depth, stories, uses,
+                   floor_height, wwr, notch_width, notch_depth, stem_width, bar_depth, court_width, court_depth,
+                   tower_width, tower_depth, tower_stories, dsb_path, apply_constructions) -> dict:
+              form = dict(locals())
+              def text(v):
+                  if v is None:
+                      return ""
+                  if isinstance(v, float) and v.is_integer():
+                      return str(int(v))
+                  return str(v).strip()
+              return {"body": json.dumps({k: text(v) for k, v in form.items()}, ensure_ascii=False)}
+        variables:
+        - variable: mode
+          value_selector: [start, mode]
+        - variable: location
+          value_selector: [start, location]
+        - variable: building_type
+          value_selector: [start, building_type]
+        - variable: run_measures
+          value_selector: [start, run_measures]
+        - variable: name
+          value_selector: [start, name]
+        - variable: shape
+          value_selector: [start, shape]
+        - variable: width
+          value_selector: [start, width]
+        - variable: depth
+          value_selector: [start, depth]
+        - variable: stories
+          value_selector: [start, stories]
+        - variable: uses
+          value_selector: [start, uses]
+        - variable: floor_height
+          value_selector: [start, floor_height]
+        - variable: wwr
+          value_selector: [start, wwr]
+        - variable: notch_width
+          value_selector: [start, notch_width]
+        - variable: notch_depth
+          value_selector: [start, notch_depth]
+        - variable: stem_width
+          value_selector: [start, stem_width]
+        - variable: bar_depth
+          value_selector: [start, bar_depth]
+        - variable: court_width
+          value_selector: [start, court_width]
+        - variable: court_depth
+          value_selector: [start, court_depth]
+        - variable: tower_width
+          value_selector: [start, tower_width]
+        - variable: tower_depth
+          value_selector: [start, tower_depth]
+        - variable: tower_stories
+          value_selector: [start, tower_stories]
+        - variable: dsb_path
+          value_selector: [start, dsb_path]
+        - variable: apply_constructions
+          value_selector: [start, apply_constructions]
+        outputs:
+          body:
+            type: string
+            children: null
+    - id: submit
+      type: custom
+      position:
+        x: 630
+        y: 300
+      data:
+        type: http-request
+        title: 送出分析
+        desc: 伺服器先檢查表單,錯的話立刻回 400 和原因
+        method: post
+        url: '{{#env.DBMCP_URL#}}/api/workflow'
+        authorization:
+          type: api-key
+          config:
+            type: bearer
+            api_key: '{{#env.DBMCP_TOKEN#}}'
+        headers: 'Content-Type:application/json'
+        params: ''
+        body:
+          type: json
+          data:
+          - id: body
+            key: ''
+            type: text
+            value: '{{#form.body#}}'
+        timeout:
+          max_connect_timeout: 10
+          max_read_timeout: 60
+          max_write_timeout: 20
+        ssl_verify: true
+        retry_config:
+          retry_enabled: false
+          max_retries: 0
+          retry_interval: 100
+    - id: parse_submit
+      type: custom
+      position:
+        x: 930
+        y: 300
+      data:
+        type: code
+        title: 讀工作編號
+        code_language: python3
+        code: |
+          import json
+
+          def main(status_code: int, body: str) -> dict:
+              try:
+                  d = json.loads(body)
+              except Exception:
+                  return {"ok": "false", "job_id": "", "error": f"伺服器回應不是 JSON(HTTP {status_code}):{body[:300]}"}
+              if d.get("ok") and d.get("job_id"):
+                  return {"ok": "true", "job_id": d["job_id"], "error": ""}
+              return {"ok": "false", "job_id": "", "error": d.get("error") or f"HTTP {status_code}"}
+        variables:
+        - variable: status_code
+          value_selector: [submit, status_code]
+        - variable: body
+          value_selector: [submit, body]
+        outputs:
+          ok:
+            type: string
+            children: null
+          job_id:
+            type: string
+            children: null
+          error:
+            type: string
+            children: null
+    - id: check_submit
+      type: custom
+      position:
+        x: 1230
+        y: 300
+      data:
+        type: if-else
+        title: 表單通過?
+        cases:
+        - case_id: 'true'
+          logical_operator: and
+          conditions:
+          - id: c-ok
+            varType: string
+            variable_selector: [parse_submit, ok]
+            comparison_operator: is
+            value: 'true'
+    - id: end_rejected
+      type: custom
+      position:
+        x: 1530
+        y: 520
+      data:
+        type: end
+        title: 表單有誤
+        outputs:
+        - variable: error
+          value_selector: [parse_submit, error]
+    - id: wait
+      type: custom
+      position:
+        x: 1530
+        y: 250
+      width: 1000
+      height: 260
+      data:
+        type: loop
+        title: 等待分析完成
+        desc: 每次最多等 45 秒;最多 45 次(約 34 分鐘)
+        start_node_id: wait_start
+        loop_count: 45
+        logical_operator: and
+        break_conditions:
+        - id: b-finished
+          varType: string
+          variable_selector: [wait, finished]
+          comparison_operator: is
+          value: 'true'
+        loop_variables:
+        - id: lv-finished
+          label: finished
+          var_type: string
+          value_type: constant
+          value: 'false'
+        - id: lv-status
+          label: status_json
+          var_type: string
+          value_type: constant
+          value: ''
+        error_handle_mode: terminated
+    - id: wait_start
+      type: custom-loop-start
+      parentId: wait
+      position:
+        x: 24
+        y: 68
+      zIndex: 1002
+      data:
+        type: loop-start
+        title: ''
+        isInLoop: true
+    - id: poll
+      type: custom
+      parentId: wait
+      position:
+        x: 120
+        y: 68
+      zIndex: 1002
+      data:
+        type: http-request
+        title: 查進度
+        isInLoop: true
+        loop_id: wait
+        method: get
+        url: '{{#env.DBMCP_URL#}}/api/jobs/{{#parse_submit.job_id#}}'
+        authorization:
+          type: api-key
+          config:
+            type: bearer
+            api_key: '{{#env.DBMCP_TOKEN#}}'
+        headers: ''
+        params: 'wait:45'
+        body:
+          type: none
+          data: []
+        timeout:
+          max_connect_timeout: 10
+          max_read_timeout: 60
+          max_write_timeout: 20
+        ssl_verify: true
+        retry_config:
+          retry_enabled: true
+          max_retries: 2
+          retry_interval: 2000
+    - id: parse_poll
+      type: custom
+      parentId: wait
+      position:
+        x: 420
+        y: 68
+      zIndex: 1002
+      data:
+        type: code
+        title: 完成了嗎
+        isInLoop: true
+        loop_id: wait
+        code_language: python3
+        code: |
+          import json
+
+          def main(body: str) -> dict:
+              try:
+                  d = json.loads(body)
+              except Exception:
+                  return {"finished": "false", "status_json": ""}
+              return {"finished": "true" if d.get("finished") else "false", "status_json": body}
+        variables:
+        - variable: body
+          value_selector: [poll, body]
+        outputs:
+          finished:
+            type: string
+            children: null
+          status_json:
+            type: string
+            children: null
+    - id: remember
+      type: custom
+      parentId: wait
+      position:
+        x: 720
+        y: 68
+      zIndex: 1002
+      data:
+        type: assigner
+        title: 記下狀態
+        version: '2'
+        isInLoop: true
+        loop_id: wait
+        items:
+        - variable_selector: [wait, finished]
+          input_type: variable
+          operation: over-write
+          value: [parse_poll, finished]
+        - variable_selector: [wait, status_json]
+          input_type: variable
+          operation: over-write
+          value: [parse_poll, status_json]
+    - id: result
+      type: custom
+      position:
+        x: 2630
+        y: 300
+      data:
+        type: code
+        title: 整理結果
+        desc: 去掉每一步的原始輸出,只留給報告用的資料
+        code_language: python3
+        code: |
+          import json
+
+          def main(status_json: str) -> dict:
+              try:
+                  d = json.loads(status_json)
+              except Exception:
+                  return {"ok": "false", "error": "等太久還沒完成,或伺服器沒有回應;可稍後用工作編號再查", "data": ""}
+              if d.get("status") != "done":
+                  return {"ok": "false", "error": d.get("error") or f"工作狀態:{d.get('status')}", "data": ""}
+              r = d.get("result") or {}
+              r.pop("steps", None)
+              return {"ok": "true", "error": "", "data": json.dumps(r, ensure_ascii=False, indent=1)}
+        variables:
+        - variable: status_json
+          value_selector: [wait, status_json]
+        outputs:
+          ok:
+            type: string
+            children: null
+          error:
+            type: string
+            children: null
+          data:
+            type: string
+            children: null
+    - id: check_result
+      type: custom
+      position:
+        x: 2930
+        y: 300
+      data:
+        type: if-else
+        title: 分析成功?
+        cases:
+        - case_id: 'true'
+          logical_operator: and
+          conditions:
+          - id: c-done
+            varType: string
+            variable_selector: [result, ok]
+            comparison_operator: is
+            value: 'true'
+    - id: end_failed
+      type: custom
+      position:
+        x: 3230
+        y: 520
+      data:
+        type: end
+        title: 分析失敗
+        outputs:
+        - variable: error
+          value_selector: [result, error]
+    - id: report
+      type: custom
+      position:
+        x: 3230
+        y: 300
+      data:
+        type: llm
+        title: DeepSeek 寫報告
+        model:
+          provider: langgenius/deepseek/deepseek
+          name: deepseek-chat
+          mode: chat
+          completion_params:
+            temperature: 0.2
+        context:
+          enabled: false
+          variable_selector: []
+        vision:
+          enabled: false
+        prompt_template:
+        - id: system
+          role: system
+          text: |
+            你是建築能耗顧問,用繁體中文為業主寫一份白話報告。資料是 DesignBuilder 與 EnergyPlus 的模擬結果(JSON)。
+            規則:
+            1. 只能用 JSON 裡有的數字,不要自己估算、補數字或推測沒有的資料;需要的資料沒有就寫「這次沒有算」。
+            2. 先一句話結論(全年用能與單位面積能耗、最大的用能項目、最值得做的節能措施)。
+            3. 依序:建築與條件(量體、各層用途、地點與氣候區、構造基準)→ 全年用能與分項(表格)→ 尖峰用電與溫度不達標時數 →
+               節能措施(表格:措施、判讀、省能 %、每年省、投資、回本;依 JSON 的順序)→ 模型與檔案位置 → 注意事項。
+            4. simulation.district_loads 為 true 時說明:空調是理想負載,供暖 / 供冷數字是建築需要的冷熱量,不是設備實際耗能。
+            5. 節能措施的投資與能源價格是假設值(measures.cost_note),要寫出來。warnings 有內容時放在注意事項。
+            6. 不要用「作為 AI」之類的話,不要寫開場白。
+        - id: user
+          role: user
+          text: '{{#result.data#}}'
+    - id: end
+      type: custom
+      position:
+        x: 3530
+        y: 300
+      data:
+        type: end
+        title: 完成
+        outputs:
+        - variable: report
+          value_selector: [report, text]
+        - variable: data
+          value_selector: [result, data]

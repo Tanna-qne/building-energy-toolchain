@@ -10,7 +10,7 @@ The user builds and edits models in DesignBuilder. An AI assistant (through the 
 
 | Component | File | Role |
 |---|---|---|
-| DesignBuilder MCP server | [tools/designbuilder_mcp/server.py](../tools/designbuilder_mcp/server.py) | Eighteen tools that drive DesignBuilder through the official [db-process](https://github.com/DesignBuilderSoftware/db-process) command line (`/process=`) |
+| DesignBuilder MCP server | [tools/designbuilder_mcp/server.py](../tools/designbuilder_mcp/server.py) | Twenty-one tools that drive DesignBuilder through the official [db-process](https://github.com/DesignBuilderSoftware/db-process) command line (`/process=`) |
 | Command-line runner | [tools/designbuilder_mcp/cli.py](../tools/designbuilder_mcp/cli.py) | The same chain without an assistant: simulate a `.dsb`, then run the measures report |
 | Desktop app | [tools/app/app.py](../tools/app/app.py) | Pick a `.dsb` / `.idf`, or enter a few building parameters, choose weather, run, open the report |
 | Engine adapter | [tools/dbengine/](../tools/dbengine/) | Makes DesignBuilder's bundled EnergyPlus usable from the command line (see below) |
@@ -39,6 +39,8 @@ All operations work on a copy of the user's model in `db_models/dbmcp/<model>/`;
 | `db_find_schedules` | Searches DesignBuilder's schedule library by name and shows each schedule's weekday, Saturday and Sunday profile | No | Yes (2026-11-26) |
 | `db_assign_schedule` | Assigns existing library schedules (occupancy, lighting, equipment, hot water) to zones: preview, then write, save and read back. It never creates new schedules | Yes (headless) | Yes (2026-11-26) |
 | `db_assign_construction` | Applies the ASHRAE 90.1-2019 baseline constructions for a climate zone (default 4A) and building type at building level: walls, roofs, exposed and ground floors, doors, glazing, internal constructions and infiltration. An optional target U for walls, roofs or exposed floors adds a copy of the baseline construction with a thicker or thinner insulation layer | Yes (headless) | Yes (2026-11-26) |
+| `db_workflow` | The whole chain for the Dify form workflow: new model from parameters (or an existing `.dsb`) → location → ASHRAE baseline constructions → annual simulation → retrofit measures, returned as structured JSON | Yes (headless) | Yes (2026-11-27) |
+| `db_job_start` / `db_job_status` | Run any of the DesignBuilder tools above as a background job and check on it; jobs run one at a time and their results are kept on disk | — | Yes (2026-11-27) |
 | `db_update_bridge` | Replaces an installed DbMcpBridge script inside a model with the repository version, without opening DesignBuilder's user interface, then runs a test job | Optional test (headless) | Yes (2026-11-26) |
 
 `db_zones` and `db_assign_activity` use [DbMcpBridge.cs](../tools/designbuilder_mcp/DbMcpBridge.cs), a C# script that the model must contain: it is added once in Script Manager, or inherited by models made with `db_build_model` (see problems 7 and 11 below). Under `/process=` DesignBuilder loads scripts only when a calculation starts, so the job runs in the `Before*IdfGeneration` hooks of a heating design run (about one minute). Setting `ActivityTemplateId` through the API does not load the template's values (the user interface does), so the tool writes up to 37 activity attributes from DesignBuilder's own template library. Tested on the Model Geometry Example: three zones changed, 114 attributes written and read back, and the next annual simulation's IDF used the new occupancy densities and schedules.
@@ -67,6 +69,16 @@ Zones are named `F03 North` / `F03 Core`, and blocks are named by floor (`F03`).
 A `.dsb` file is a zip archive holding one `.skh` file, in which the script is stored as a length-prefixed string (newlines as `^`, `#` as `_HASH_`). `db_update_bridge` relies on this to update a script that is already installed. It backs up the model first and refuses to change anything if the layout is not as expected. Installing the script in a model for the first time still has to be done in Script Manager.
 
 Example of a `db_simulate` result (Model Geometry Example, London Gatwick weather, 2026-11-23): annual site energy 43,900 kWh, 134 kWh/m², interior lighting 58% of the total, peak electricity 12.1 kW, 2 unmet heating hours.
+
+## HTTP access and the Dify workflow
+
+[http_server.py](../tools/designbuilder_mcp/http_server.py) serves the same tools over streamable HTTP (`/mcp`), plus three REST endpoints for a [Dify](https://dify.ai) form workflow ([dify/](../dify/README.md)):
+
+- `POST /api/workflow` checks the form before anything starts (unknown use, ambiguous location, missing size) and queues `db_workflow`.
+- `GET /api/jobs/{id}?wait=45` waits up to 45 seconds for the job before answering, so Dify polls about once a minute.
+- `GET /api/options` lists the uses, shapes and the locations whose weather file is on the computer.
+
+Dify Cloud reaches the computer through a tunnel, which puts the endpoint on the internet. The server therefore listens on `127.0.0.1` only and refuses requests without the bearer token (generated once, kept outside git). In HTTP mode file paths are limited to the model folders, and `db_open` is not offered. DeepSeek, in Dify, only writes the report from the structured result; its prompt allows only numbers that are in the result. Tested end to end through the REST API as Dify calls it: a three-storey Chicago office with retrofit measures finished in 768 seconds over 17 polls.
 
 ## Using DesignBuilder's bundled EnergyPlus
 
@@ -128,6 +140,12 @@ Every problem below came up while building and testing the tools on DesignBuilde
 25. **Building meters are not in the `.eso`.** EnergyPlus writes them to `eplusout.mtr`, which is now collected too. DesignBuilder also appends `,ON` to some frequencies in the `.eso` dictionary (`!Hourly,ON`), which the reader handles.
 26. **Totals are checked.** For every meter, `db_results` compares the sum of the hourly, daily or monthly values with EnergyPlus's run period value. They have matched in all tests (for example 195,416.7 kWh total electricity).
 
+### HTTP and Dify
+
+27. **DesignBuilder runs take longer than a client will wait.** A model with retrofit measures takes about 13 minutes, longer than Dify waits for a tool or HTTP response. Fix: background jobs run one at a time, because only one DesignBuilder instance can run, and results are kept on disk. The REST status call long-polls for up to 45 seconds, which keeps it under Dify's read timeout and typical tunnel limits.
+28. **The MCP endpoint refuses requests that arrive through a tunnel.** FastMCP protects against DNS rebinding by accepting only `localhost` Host headers. Fix: `--public-host` adds the tunnel's host name. The `/api/*` routes are outside this check, and are protected by the token like everything else.
+29. **The location list was full of stations that share one weather file.** DesignBuilder assigns the nearest weather file to many locations, so 30 English stations all showed the Gatwick file. Fix: `/api/options` lists only the station the file was recorded at (the same WMO number).
+
 ## Known limitations
 
 - Only one DesignBuilder instance can run, so tools that open DesignBuilder refuse to start while it is open.
@@ -137,6 +155,7 @@ Every problem below came up while building and testing the tools on DesignBuilde
 - Weather files that are not on this computer must be downloaded in DesignBuilder or supplied as an EPW file; the tools do not download them. Without `location`, new models keep the template's location (San Francisco).
 - Results stored inside the `.dsb` (design loads, daylighting, CFD) cannot be read, and `db_calculate` has not been tested.
 - `db_results` writes CSV only (no `.xlsx`).
+- The Dify DSL file has not yet been imported into Dify; its format differs between Dify versions, and [dify/README.md](../dify/README.md) describes how to build the same workflow by hand.
 - The bundled engine has no IDF version updater, so IDFs older than 23.1 must be re-exported from DesignBuilder.
 
 ## Questions for DesignBuilder
