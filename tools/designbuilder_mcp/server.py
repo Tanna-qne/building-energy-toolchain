@@ -540,7 +540,7 @@ BRIDGE_SETUP = ("這個模型還沒有裝 DbMcpBridge 腳本(或沒有啟用)。
                 "在右邊 CS-Script 資料夾新增腳本、貼上 tools/designbuilder_mcp/DbMcpBridge.cs, Enable program = Yes;"
                 "左邊點「Script」列, 右邊選這個腳本按綠色勾勾; 勾 Enable scripts; 存檔後關閉 DB。")
 ZONE_KEYS = ("ActivityTemplateId", "OccupancyValue", "HeatingDesignSetPointTemperature",
-             "ActiveCoolingDesignSetPointTemperature", "MinFreshAir", "OccupancySchedule")
+             "ActiveCoolingDesignSetPointTemperature", "MinFreshAir", "OccupancySchedule", "FluorescentLightingValue")
 
 
 def _write_job(dsb: Path, lines):
@@ -701,6 +701,10 @@ def _same(a, b):
         return str(a).strip() == str(b).strip()
 
 
+def _lpd(light):
+    return f"{float(light['FluorescentLightingValue']):.2f}" if light else "(不變)"
+
+
 @mcp.tool()
 def db_assign_activity(dsb_path: str, assignments: dict, apply: bool = False) -> str:
     """把熱區換成指定用途: 寫入 DB 活動範本編號, 並逐項寫入該範本的人員、設備、作息、設定溫度、新風等數值
@@ -714,21 +718,23 @@ def db_assign_activity(dsb_path: str, assignments: dict, apply: bool = False) ->
     """
     dsb = _working_copy(dsb_path)
     try:
-        plan_uses = {sel: dblibrary.resolve_space(use) for sel, use in assignments.items()}
+        plan_uses = {sel: (dblibrary.resolve_space(use), dblibrary.lighting_for_space(use))
+                     for sel, use in assignments.items()}
     except KeyError as e:
         raise ValueError(str(e).strip("'\""))
     rows, secs = _bridge(dsb, [("dump", ",".join(ZONE_KEYS))])
     zones = (_zones(rows) or [[]])[-1]
     targets = {}
-    for sel, tpl in plan_uses.items():
+    for sel, (tpl, light) in plan_uses.items():
         hit = _resolve(zones, sel)
         if not hit:
             raise ValueError(f"找不到熱區或區塊「{sel}」;可用 db_zones 查看名稱")
         for z in hit:
-            targets[z["idf"]] = (z, tpl)
+            targets[z["idf"]] = (z, tpl, light)
     lines = [f"## 套用用途{'(已寫入)' if apply else '(預覽,尚未寫入)'}:{dsb.stem}", "",
-             "| 熱區 | 目前用途 | 改成 | 人員 人/m² | 暖 / 冷設定 °C | 新風 L/s·人 | 在室作息 |", "|---|---|---|---|---|---|---|"]
-    for idf, (z, tpl) in targets.items():
+             "| 熱區 | 目前用途 | 改成 | 人員 人/m² | 暖 / 冷設定 °C | 新風 L/s·人 | 照明 W/m² | 在室作息 |",
+             "|---|---|---|---|---|---|---|---|"]
+    for idf, (z, tpl, light) in targets.items():
         a, s = z["attrs"], dblibrary.activity_summary(tpl)
         sch = s["occupancy_hours"]
         lines.append(f"| `{idf}` | {dblibrary.activity_label(a.get('ActivityTemplateId', ''))} | "
@@ -736,16 +742,20 @@ def db_assign_activity(dsb_path: str, assignments: dict, apply: bool = False) ->
                      f"{a.get('HeatingDesignSetPointTemperature', '')}/{a.get('ActiveCoolingDesignSetPointTemperature', '')} → "
                      f"{tpl.get('HeatingDesignSetPointTemperature', '')}/{tpl.get('ActiveCoolingDesignSetPointTemperature', '')} | "
                      f"{a.get('MinFreshAir', '')} → {tpl.get('MinFreshAir', '')} | "
+                     f"{a.get('FluorescentLightingValue', '')} → {_lpd(light)} | "
                      f"`{dblibrary.spark(sch['平日']) if sch else '—'}` |")
     lines += ["", f"數值來源:本機 DB 範本庫(活動範本編號見「改成」欄),每個熱區寫入範本編號加 "
-                  f"{len(dblibrary.ACTIVITY_ATTRIBUTES)} 項以內的屬性(範本裡空白的不寫)。"]
+                  f"{len(dblibrary.ACTIVITY_ATTRIBUTES)} 項以內的屬性(範本裡空白的不寫)。"
+                  f"照明功率密度用 {dblibrary.LIGHTING_SOURCE}(Appendix G 基準)的照明範本,計算方式設為 W/m²。"]
     if not apply:
         lines.append("確認無誤後,用同樣參數加上 apply=True 寫入。")
         return "\n".join(lines)
 
     job, want = [], {}
-    for idf, (z, tpl) in targets.items():
+    for idf, (z, tpl, light) in targets.items():
         attrs = [("ActivityTemplateId", tpl["Id"])] + dblibrary.activity_attributes(tpl)
+        if light:
+            attrs += dblibrary.lighting_attributes(light)
         want[idf] = dict(attrs)
         job += [("set", idf, k, v) for k, v in attrs]
     keys = sorted({k for w in want.values() for k in w})

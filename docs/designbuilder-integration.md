@@ -41,6 +41,8 @@ All operations work on a copy of the user's model in `db_models/dbmcp/<model>/`;
 
 `db_zones` and `db_assign_activity` use [DbMcpBridge.cs](../tools/designbuilder_mcp/DbMcpBridge.cs), a C# script that must be added once to each model in Script Manager. Under `/process=` DesignBuilder loads scripts only when a calculation starts, so the job runs in the `Before*IdfGeneration` hooks of a heating design run (about one minute). Setting `ActivityTemplateId` through the API does not load the template's values (the user interface does), so the tool writes up to 37 activity attributes from DesignBuilder's own template library. Tested on the Model Geometry Example: three zones changed, 114 attributes written and read back, and the next annual simulation's IDF used the new occupancy densities and schedules.
 
+`db_assign_activity` also sets lighting. Each space type maps to an ASHRAE 90.1-2019 Table G3.7 lighting template from DesignBuilder's library, for example 11.84 W/m² for an open plan office. The tool writes that template and its values, and sets `FluorescentLightingUnits` to `1-Watts per m2`. With the per-100-lux method, DesignBuilder would multiply by the activity's target illuminance: the templates' W/m²-100 lux values are the W/m² values divided by 3, i.e. based on 300 lux. New models otherwise inherit DesignBuilder's "Reference" lighting template (15 W/m²).
+
 The schedule and construction tools take their values only from DesignBuilder's library, so the assistant chooses among existing items and never types numbers. The exception is a target U, which the user gives. Findings from testing on the same model:
 
 - The model's tables (`Site.GetTable`) contain the whole library (2717 constructions, 4274 schedules), so library ids can be used directly.

@@ -111,6 +111,57 @@ ACTIVITY_ATTRIBUTES = (
 )
 
 
+# 中文用途 → ASHRAE 90.1-2019 Table G3.7(Appendix G 基準照明功率密度)的空間類型, DB 照明範本庫裡的名稱(去掉結尾的數值)。
+# 一般空間用 Common Space, 特定建築類型才有的用 Building-Specific Space
+LIGHTING_SOURCE = "ASHRAE 90.1-2019, Table G3.7"
+LIGHTING_TYPES = {
+    "辦公": "Common Space, Office - Open plan",
+    "會議": "Common Space, Conference/Meeting/Multipurpose Room",
+    "大廳": "Common Space, Lobby - All others",
+    "接待": "Common Space, Lobby - All others",
+    "走廊": "Common Space, Corridor - All others",
+    "樓梯": "Common Space, Stairwell",
+    "茶水間": "Common Space, Lounge/Breakroom - All others",
+    "儲藏": "Common Space, Storage Room - >=50 ft2 (4.6 m2)",
+    "廁所": "Common Space, Restroom - All others",
+    "機房": "Common Space, Electrical/Mechanical Room",
+    "商店": "Common Space, Sales Area",
+    "超市": "Common Space, Sales Area",
+    "商場公共區": "Building-Specific Space, Retail Facilities - Mall concourse",
+    "餐廳": "Common Space, Dining Area - Family dining",
+    "快餐": "Common Space, Dining Area - Cafeteria or fast food dining",
+    "廚房": "Common Space, Food Preparation Area",
+    "教室": "Common Space, Classroom/Lecture Hall/Training Room - All others",
+    "圖書館": "Building-Specific Space, Library - Reading area",
+    "實驗室": "Common Space, Laboratory - All others",
+    "客房": "Common Space, Guest Room",
+    "住宅": "Common Space, Dwelling Unit",
+    "倉庫": "Building-Specific Space, Warehouse - Storage Area - Medium to bulky, palletized items",
+    "候車": "Common Space, Audience Seating Area - Transportation Facility",
+    "健身房": "Building-Specific Space, Gymnasium/Fitness Center - Exercise area",
+    "診間": "Building-Specific Space, Healthcare Facility - Exam/treatment room",
+}
+# 換照明範本時寫入熱區的屬性(API 只改範本編號不會帶入數值)。計算方式固定為 W/m², DB 才直接用 G3.7 的功率密度;
+# 若用「每 100 lux」, DB 會再乘活動範本的照度(範本裡的 W/m²-100lux 是以 300 lux 換算的)
+LIGHTING_ATTRIBUTES = ("TungstenLightingOn", "FluorescentLightingOn", "FluorescentLightingValue",
+                       "FluorescentLightingWattsPerM2Per100Lux", "LightingControlOn", "LightingControlType",
+                       "LightingReturnAirFraction", "LightingRadiantFraction", "LightingVisibleFraction", "LuminaireType")
+
+
+def lighting_for_space(label):
+    """中文用途 → ASHRAE 2019 G3.7 照明範本 row; 對照表外或庫裡找不到回傳 None。"""
+    want = LIGHTING_TYPES.get(label)
+    if not want:
+        return None
+    return next((r for r in table("LightingTemplates").values()
+                 if r.get("Source") == LIGHTING_SOURCE and r["Name"].rsplit(",", 1)[0] == want), None)
+
+
+def lighting_attributes(row):
+    return ([("LightingTemplateId", row["Id"]), ("FluorescentLightingUnits", "1-Watts per m2")] +
+            [(k, row[k]) for k in LIGHTING_ATTRIBUTES if row.get(k, "") != ""])
+
+
 def activity_attributes(row):
     """範本 row → [(屬性, 值)]; 範本裡空白的欄位不寫(沿用熱區原值)。"""
     return [(k, row[k]) for k in ACTIVITY_ATTRIBUTES if row.get(k, "") != ""]
