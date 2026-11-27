@@ -273,11 +273,24 @@ def run(form):
         return text
     step("空調系統" if p.get("hvac") else "讀空調設定", hvac_step)
     hvac = hvac_box["info"]
-    out["hvac"] = {"chosen": p.get("hvac", HVAC_KEEP), "template": hvac["template"], "template_id": hvac["template_id"],
-                   "heating": f"{hvac['heating_fuel']},季節效率 {hvac['heating_scop']}" if hvac["heating_on"] else "無",
-                   "cooling": f"電,季節效率 {hvac['cooling_sseer']}" if hvac["cooling_on"] else "無",
-                   "ventilation": "機械新風" if hvac["mech_vent_on"] else ("自然通風" if hvac["nat_vent_on"] else "無"),
-                   "dhw": f"{hvac['dhw_fuel']},效率 {hvac['dhw_cop']}"}
+    if hvac["detailed"]:
+        net = hvac["network"]
+        out["hvac"] = {"chosen": "模型裡的詳細空調", "detailed": True, "loops": net["loops"], "zone_groups": net["groups"],
+                       "zones_served": net["zones_served"], "zones_total": net["zones_total"],
+                       "note": "EnergyPlus 直接模擬模型裡的系統(含風機、水泵、冷熱源),不用效率換算"}
+        if not net["known"]:
+            warnings.append("模型的橋接腳本是舊版,讀不到詳細空調的系統摘要;系統有沒有接好請在 DB 確認")
+        elif not net["loops"]:
+            warnings.append("模型是詳細空調但沒有任何系統,模擬沒有冷暖;請在 DB 用 Load HVAC template 載入系統")
+        elif net["zones_served"] < net["zones_total"]:
+            warnings.append(f"詳細空調有 {net['zones_total'] - net['zones_served']} 個熱區沒接到系統")
+    else:
+        out["hvac"] = {"chosen": p.get("hvac", HVAC_KEEP), "detailed": False,
+                       "template": hvac["template"], "template_id": hvac["template_id"],
+                       "heating": f"{hvac['heating_fuel']},季節效率 {hvac['heating_scop']}" if hvac["heating_on"] else "無",
+                       "cooling": f"電,季節效率 {hvac['cooling_sseer']}" if hvac["cooling_on"] else "無",
+                       "ventilation": "機械新風" if hvac["mech_vent_on"] else ("自然通風" if hvac["nat_vent_on"] else "無"),
+                       "dhw": f"{hvac['dhw_fuel']},效率 {hvac['dhw_cop']}"}
     text = step("年度模擬", server.db_simulate, str(dsb))
     sim = max(dsb.parent.glob("sim_*"), key=lambda q: q.stat().st_mtime)
     if not (sim / "eplustbl.htm").exists() or "模擬沒有成功" in text:
@@ -299,7 +312,9 @@ def run(form):
                if d in wwr_sim and abs(want[d] - wwr_sim[d]) > 0.03]
         if off:
             warnings.append("DesignBuilder 匯入時重排了窗戶,窗牆比和指定值不同(結果以模擬實際值為準):" + ";".join(off))
-    if out["simulation"]["district_loads"]:
+    if out["simulation"]["district_loads"] and hvac["detailed"]:
+        warnings.append("詳細空調的模型仍有區域冷熱(例如熱水沒有接到系統);這部分是需求量,不是實際耗能")
+    elif out["simulation"]["district_loads"]:
         d = delivered_energy(out["simulation"], hvac)
         warnings += d.pop("problems")
         d.pop("hvac")

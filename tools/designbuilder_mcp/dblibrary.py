@@ -368,7 +368,7 @@ _HVAC_SKIP = {"Id", "Name", "CategoryId", "Default", "Colour", "Locked", "Scratc
               "FansOn", "FansSupplyOn", "FansSupplyPower", "FansExtractOn", "FansExtractPower", "FanMotorEfficiency",
               "NaturalVentilationUserDefined", "AirDistributionExhaustHeight"}
 # 換算燃料要讀的模型屬性(建築層級)
-HVAC_READ = ("HVACTemplateId", "HeatingOn", "ActiveCoolingOn", "MechanicalVentilationOn", "NaturalVentilationOn",
+HVAC_READ = ("HVACDataLevel", "HVACTemplateId", "HeatingOn", "ActiveCoolingOn", "MechanicalVentilationOn", "NaturalVentilationOn",
              "BoilerFuel", "SCoPFrac", "SSEERFrac", "DHWTemplateId", "DHWCoP", "DHWFuelType")
 
 

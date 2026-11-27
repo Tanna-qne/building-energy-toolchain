@@ -1196,12 +1196,29 @@ def _hvac_info(b):
         except ValueError:
             return None
     tmpl = dblibrary.table("HVACTemplates").get(b.get("HVACTemplateId", ""), {})
-    return {"template_id": b.get("HVACTemplateId", ""), "template": tmpl.get("Name", ""),
+    return {"detailed": b.get("HVACDataLevel") == "1",  # 實測: 0 = 簡易空調, 1 = 詳細空調
+            "template_id": b.get("HVACTemplateId", ""), "template": tmpl.get("Name", ""),
             "heating_on": b.get("HeatingOn") == "1", "cooling_on": b.get("ActiveCoolingOn") == "1",
             "mech_vent_on": b.get("MechanicalVentilationOn") == "1", "nat_vent_on": b.get("NaturalVentilationOn") == "1",
             "heating_fuel": dblibrary.fuel(b.get("BoilerFuel")), "heating_scop": f("SCoPFrac"),
             "cooling_fuel": "電", "cooling_sseer": f("SSEERFrac"),
             "dhw_fuel": dblibrary.fuel(b.get("DHWFuelType"), "dhw"), "dhw_cop": f("DHWCoP")}
+
+
+def _hvac_network(rows):
+    """橋接 hvacinfo 的輸出 → 詳細空調網路摘要(迴路、分區群組、有接到系統的熱區數)。"""
+    net = {"known": False, "loops": 0, "groups": 0, "zones_total": 0, "zones_served": 0, "loop_types": []}
+    for r in rows:
+        if r[0] == "hvacnet":
+            net["known"] = True
+            kv = dict(c.split("=", 1) for c in r[1:] if "=" in c)
+            net["loops"], net["groups"] = int(kv.get("loops", 0)), int(kv.get("groups", 0))
+            net["zones_total"] = len([z for z in kv.get("buildingzones", "").split(";") if z.strip()])
+        elif r[0] == "hvacloop":
+            net["loop_types"].append(r[2] if len(r) > 2 else "")
+        elif r[0] == "hvaczone" and len(r) > 2 and r[2] != "null":
+            net["zones_served"] += 1
+    return net
 
 
 def assign_hvac(dsb_path, system=None, apply=False):
@@ -1212,12 +1229,29 @@ def assign_hvac(dsb_path, system=None, apply=False):
         want["HVACTemplateId"] = tmpl["Id"]
     keys = sorted(set(want) | set(dblibrary.HVAC_READ))
     dsb = _working_copy(dsb_path)
-    job = [("bdump", ",".join(keys))]
-    if apply and want:
-        job += [("bset", k, v) for k, v in want.items()] + [("bdump", ",".join(keys)), ("save",)]
-    rows, secs = _bridge(dsb, job)
+    rows, secs = _bridge(dsb, [("bdump", ",".join(keys)), ("hvacinfo",)])
     blds = _buildings(rows) or [{}]
-    before, after = _hvac_info(blds[0]), _hvac_info(blds[-1])
+    before = _hvac_info(blds[0])
+    before["network"] = _hvac_network(rows)
+    if before["detailed"]:
+        net = before["network"]
+        text = (f"## 空調系統:{dsb.stem}\n\n- 這個模型用 DB 的**詳細空調**(HVACDataLevel = 1)" +
+                (f":{net['loops']} 個迴路、{net['groups']} 個分區群組,接了 {net['zones_served']} / {net['zones_total']} 個熱區。\n"
+                 if net["known"] else ";模型裡的橋接腳本是舊版,讀不到系統摘要(用 db_update_bridge 更新)。\n") +
+                "- 模擬直接用模型裡的系統(風機、盤管、冷熱源都由 EnergyPlus 計算),不需要用效率換算。")
+        if net["known"] and not net["loops"]:
+            text += "\n- **警告:詳細空調裡沒有任何系統,模擬不會有冷暖。** 請在 DB 用 Load HVAC template 載入系統。"
+        elif net["known"] and net["zones_served"] < net["zones_total"]:
+            text += f"\n- **注意:有 {net['zones_total'] - net['zones_served']} 個熱區沒接到空調系統。**"
+        if tmpl:
+            raise ValueError("這個模型用 DB 的詳細空調,簡易空調範本不會生效。要換系統,請在 DB 的 HVAC 頁用 "
+                             "Load HVAC template 選系統(精靈會自動接好熱區),或把模型切回簡易空調。\n\n" + text)
+        return text, before
+    if apply and want:
+        more, s2 = _bridge(dsb, [("bset", k, v) for k, v in want.items()] + [("bdump", ",".join(keys)), ("save",)])
+        rows, secs = rows + more, secs + s2
+        blds = _buildings(rows) or [{}]
+    after = _hvac_info(blds[-1])
 
     def desc(h):
         heat = (f"{h['heating_fuel']},季節效率 {h['heating_scop']:g}" if h["heating_on"] and h["heating_scop"]
@@ -1249,6 +1283,8 @@ def assign_hvac(dsb_path, system=None, apply=False):
 def db_assign_hvac(dsb_path: str, system: str = "", apply: bool = False) -> str:
     """看或換整棟建築的空調系統(DB 簡易空調範本)。EnergyPlus 以理想負載算冷熱需求, 用範本的季節效率換算成
     電與天然氣(和 DB 結果畫面同一算法); 換範本會一起改新風、自然通風、熱回收等設定, 冷熱需求也可能跟著變。
+    模型若已用 DB 的詳細空調(在 DB 用 Load HVAC template 載入), 只回報系統摘要, 不改; 詳細空調由人在 DB 介面載入,
+    API 載入範本時接不上熱區(見說明頁)。
 
     Args:
         dsb_path: .dsb 的完整路徑(操作的是副本)

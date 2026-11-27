@@ -203,6 +203,8 @@ namespace DB.Extensibility.Scripts
                                 foreach (Zone zone in block.Zones)
                                     output.Add("handle\t" + zone.Handle + "\t" + block.GetAttribute("Title") + "\t" + zone.Name + "\t" + zone.IdfName);
                         }
+                        else if (op == "hvacinfo")
+                            HvacInfo(building, output);
                         else if (op == "groundfix" && f.Length > 1)
                             GroundFix(building, f[1], output);
                         else if (op == "saveas" && f.Length > 2)
@@ -231,6 +233,38 @@ namespace DB.Extensibility.Scripts
                 // the calculation that loaded this script would go on with objects the job replaced and fail
                 Log("quit");
                 System.Diagnostics.Process.GetCurrentProcess().Kill();
+            }
+        }
+
+        static string Join(System.Collections.IEnumerable items)
+        {
+            var parts = new List<string>();
+            if (items != null)
+                foreach (object o in items)
+                    parts.Add(o == null ? "null" : o.ToString());
+            return string.Join(";", parts.ToArray());
+        }
+
+        void HvacInfo(Building building, List<string> output)
+        {
+            // detailed HVAC network: loops, zone groups and the building zones each group serves
+            HvacNetwork net = building.HvacNetwork;
+            if (net == null)
+            {
+                output.Add("hvacnet\tnull");
+                return;
+            }
+            output.Add("hvacnet\tloops=" + net.Loops.Count + "\tgroups=" + net.ZoneGroups.Count +
+                       "\tbuildingzones=" + Join(net.BuildingZones) + "\tavailable=" + Join(net.AvailableZones));
+            foreach (HvacLoop loop in net.Loops)
+                output.Add("hvacloop\t" + loop.Handle + "\t" + loop.LoopType + "\t" + Clean(loop.GetAttribute("Name")));
+            foreach (HvacZoneGroup g in net.ZoneGroups)
+            {
+                output.Add("hvacgroup\t" + g.Handle + "\t" + g.Name + "\tzones=" + g.Zones.Count +
+                           "\tzonelist=" + Join(g.ZoneList) + "\tavailable=" + Join(g.AvailableZones));
+                foreach (HvacZone z in g.Zones)
+                    output.Add("hvaczone\t" + g.Handle + "\t" + (z.BuildingZone == null ? "null" : z.BuildingZone.Name + "\t" + z.BuildingZone.IdfName) +
+                               "\tcomponents=" + z.Components.Count);
             }
         }
 

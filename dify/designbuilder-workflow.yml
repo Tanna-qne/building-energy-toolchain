@@ -802,6 +802,7 @@ workflow:
                列出每項的燃料、冷熱需求、效率、實際用量)→ 依燃料合計(電、天然氣)→ 尖峰用電與溫度不達標時數 →
                節能措施 → 模型與檔案位置 → 注意事項。
                有 delivered 時在注意事項寫出 delivered.method(換算方式,不含風機與水泵)。
+               hvac.detailed 為 true 時說明:模型用 DB 的詳細空調,風機、水泵、冷熱源都由 EnergyPlus 直接模擬,並寫出接了幾個熱區。
             4. 節能措施:JSON 有 measures 時用表格(措施、判讀、省能 %、每年省、投資、回本;依 JSON 的順序),並寫出投資與能源價格是假設值(measures.cost_note)。
                JSON 沒有 measures 時,這一節只寫一句「這次沒有算節能措施」,不要畫表格,結論也不要提最值得做的措施。
             5. simulation.district_loads 為 true 時說明:空調是理想負載,供暖 / 供冷數字是建築需要的冷熱量,不是設備實際耗能;
