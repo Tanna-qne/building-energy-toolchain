@@ -162,9 +162,26 @@ def lighting_attributes(row):
             [(k, row[k]) for k in LIGHTING_ATTRIBUTES if row.get(k, "") != ""])
 
 
+def lighting_schedule_fix(row):
+    """DB 的 ASHRAE 活動範本多半把照明作息指到同系列的「HVAC Availability」(空調可用時段, 營業時間內全開),
+    實驗室則指到「Occupancy」; 庫裡同系列有 ASHRAE 90.1 User's Manual 的「Lighting Receptacle」照明作息。
+    回傳 (改用的作息 row, 原作息名稱); 不需要修正回傳 None。"""
+    s = table("Schedules")
+    cur = s.get(row.get("FluorescentLightingSchedule", ""), {}).get("Name", "")
+    for prefix in ("ASHRAE 90.1 HVAC Availability - ", "ASHRAE 90.1 Occupancy - "):
+        if cur.startswith(prefix):
+            family = cur[len(prefix):]
+            fix = next((r for r in s.values() if r["Name"] == f"ASHRAE 90.1 Lighting Receptacle - {family}"), None)
+            if fix:
+                return fix, cur
+    return None
+
+
 def activity_attributes(row):
-    """範本 row → [(屬性, 值)]; 範本裡空白的欄位不寫(沿用熱區原值)。"""
-    return [(k, row[k]) for k in ACTIVITY_ATTRIBUTES if row.get(k, "") != ""]
+    """範本 row → [(屬性, 值)]; 範本裡空白的欄位不寫(沿用熱區原值)。照明作息依 lighting_schedule_fix 修正。"""
+    fix = lighting_schedule_fix(row)
+    return [(k, fix[0]["Id"] if fix and k == "FluorescentLightingSchedule" else row[k])
+            for k in ACTIVITY_ATTRIBUTES if row.get(k, "") != ""]
 
 
 def activity_label(template_id):

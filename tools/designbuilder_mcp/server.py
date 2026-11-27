@@ -747,6 +747,16 @@ def db_assign_activity(dsb_path: str, assignments: dict, apply: bool = False) ->
     lines += ["", f"數值來源:本機 DB 範本庫(活動範本編號見「改成」欄),每個熱區寫入範本編號加 "
                   f"{len(dblibrary.ACTIVITY_ATTRIBUTES)} 項以內的屬性(範本裡空白的不寫)。"
                   f"照明功率密度用 {dblibrary.LIGHTING_SOURCE}(Appendix G 基準)的照明範本,計算方式設為 W/m²。"]
+    fixes = {}
+    for _, tpl, _ in targets.values():
+        fix = dblibrary.lighting_schedule_fix(tpl)
+        if fix:
+            fixes[dblibrary.activity_label(tpl["Id"])] = fix
+    if fixes:
+        lines.append("照明作息修正(DB 的 ASHRAE 活動範本把照明作息指到空調可用時段,營業時間內全開;"
+                     "改用同系列的 ASHRAE 照明作息):")
+        lines += [f"- {use}:{old} → {new['Name']}(#{new['Id']},平日 `{dblibrary.spark(dblibrary.schedule_hours(new['Id'])['平日'])}`)"
+                  for use, (new, old) in fixes.items()]
     if not apply:
         lines.append("確認無誤後,用同樣參數加上 apply=True 寫入。")
         return "\n".join(lines)

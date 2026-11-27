@@ -25,7 +25,7 @@ All operations work on a copy of the user's model in `db_models/dbmcp/<model>/`;
 |---|---|---|---|
 | `db_status` | Whether DesignBuilder is running, the executable path, licence expiry date | No | Yes (2026-11-23) |
 | `db_inspect` | Exports the model to dsbXML (`/process=` export) and lists buildings, blocks, zones and building-level attributes | First call only (then cached) | Yes (2026-11-13) |
-| `db_simulate` | Optionally changes building-level attributes, then runs the annual EnergyPlus simulation inside DesignBuilder and collects `in.idf`, `eplusout.err`, `eplustbl.htm`, `eplusout.eso` from `%LOCALAPPDATA%\DesignBuilder\EnergyPlus` | Yes | Yes (2026-11-13, 2026-11-23) |
+| `db_simulate` | Optionally changes building-level attributes, then runs the annual EnergyPlus simulation inside DesignBuilder and collects `in.idf`, `eplusout.err`, `eplustbl.htm`, `eplusout.eso`, `eplusout.mtr` from `%LOCALAPPDATA%\DesignBuilder\EnergyPlus`. `hourly=True` turns on hourly output first | Yes | Yes (2026-11-13, 2026-11-23, 2026-11-27) |
 | `db_results` | Extracts hourly, daily or monthly results from a `db_simulate` output folder into CSV: building meters (electricity, lighting, equipment, heating, cooling, gas), outdoor temperature, and per-zone air and operative temperature, humidity and ideal-loads heating / cooling. It only reads what the simulation wrote; missing variables are reported with the frequencies that do exist | No | Yes (2026-11-27) |
 | `db_measures_report` / `db_report_status` | Runs eight retrofit measures on the exported IDF in the background and reports savings and payback | No | Yes (2026-11-13, 2026-11-23) |
 | `db_calculate` | Heating design, cooling design, daylighting, annual daylighting or CFD through `/process=` | Yes | Not yet |
@@ -39,7 +39,7 @@ All operations work on a copy of the user's model in `db_models/dbmcp/<model>/`;
 | `db_assign_construction` | Applies the ASHRAE 90.1-2019 baseline constructions for a climate zone (default 4A) and building type at building level: walls, roofs, exposed and ground floors, doors, glazing, internal constructions and infiltration. An optional target U for walls, roofs or exposed floors adds a copy of the baseline construction with a thicker or thinner insulation layer | Yes (headless) | Yes (2026-11-26) |
 | `db_update_bridge` | Replaces an installed DbMcpBridge script inside a model with the repository version, without opening DesignBuilder's user interface, then runs a test job | Optional test (headless) | Yes (2026-11-26) |
 
-`db_zones` and `db_assign_activity` use [DbMcpBridge.cs](../tools/designbuilder_mcp/DbMcpBridge.cs), a C# script that must be added once to each model in Script Manager. Under `/process=` DesignBuilder loads scripts only when a calculation starts, so the job runs in the `Before*IdfGeneration` hooks of a heating design run (about one minute). Setting `ActivityTemplateId` through the API does not load the template's values (the user interface does), so the tool writes up to 37 activity attributes from DesignBuilder's own template library. Tested on the Model Geometry Example: three zones changed, 114 attributes written and read back, and the next annual simulation's IDF used the new occupancy densities and schedules.
+`db_zones` and `db_assign_activity` use [DbMcpBridge.cs](../tools/designbuilder_mcp/DbMcpBridge.cs), a C# script that the model must contain: it is added once in Script Manager, or inherited by models made with `db_build_model` (see problems 7 and 11 below). Under `/process=` DesignBuilder loads scripts only when a calculation starts, so the job runs in the `Before*IdfGeneration` hooks of a heating design run (about one minute). Setting `ActivityTemplateId` through the API does not load the template's values (the user interface does), so the tool writes up to 37 activity attributes from DesignBuilder's own template library. Tested on the Model Geometry Example: three zones changed, 114 attributes written and read back, and the next annual simulation's IDF used the new occupancy densities and schedules.
 
 `db_assign_activity` also sets lighting. Each space type maps to an ASHRAE 90.1-2019 Table G3.7 lighting template from DesignBuilder's library, for example 11.84 W/m² for an open plan office. The tool writes that template and its values, and sets `FluorescentLightingUnits` to `1-Watts per m2`. With the per-100-lux method, DesignBuilder would multiply by the activity's target illuminance: the templates' W/m²-100 lux values are the W/m² values divided by 3, i.e. based on 300 lux. New models otherwise inherit DesignBuilder's "Reference" lighting template (15 W/m²).
 
@@ -78,21 +78,67 @@ Results match the official EnergyPlus build. For an IDF exported by DesignBuilde
 
 DesignBuilder itself is not modified, and nothing in its installation folders is changed; the files are copied.
 
+## Problems found and how they were handled
+
+Every problem below came up while building and testing the tools on DesignBuilder 2025.1 (evaluation licence, Windows 11). Each entry gives what was seen, the cause, what the tools now do, and how the fix was checked. Several of them are silent: DesignBuilder reports success but the model or the results are not what was asked for. The tools therefore read every write back and check results against totals.
+
+### Running DesignBuilder unattended
+
+1. **A UAC prompt on every launch, and DesignBuilder could not be closed.** Cause: a Windows compatibility flag (`RUNASADMIN` in `HKCU\...\AppCompatFlags\Layers`) made DesignBuilder run as administrator. A copy started from the assistant's sandbox was invisible to the user and could only be cleared by rebooting. Fix: the flag was removed (a backup of the registry value is kept). DesignBuilder runs as a standard user without problems. Check: the tools now close DesignBuilder themselves after every run.
+2. **No signal that a run has finished.** File time stamps were unreliable, and heating and cooling design write no output files. Fix: the tools read DesignBuilder's own diagnostics log (`%LOCALAPPDATA%\DesignBuilder\Diagnostics`). A run is finished when the last batch command has been processed and DesignBuilder has released the model ("Removing 'In Use' file"). Check: XML export, annual simulation, and heating and cooling design all finish and close automatically.
+3. **Runs that hang on a dialog.** Under `/process=` DesignBuilder has no main window, but dialogs (missing file, model errors) still appear and wait for a click. Fix: if the log does not grow for 300 seconds, the tool closes DesignBuilder and reports the last log lines. The dialog's own text cannot be read.
+
+### Scripting API (DbMcpBridge)
+
+4. **Changing a template id does not change the values.** Setting `ActivityTemplateId` through the API stores the id but not the template's values (the user interface loads them). The same applies to construction and lighting templates. Fix: the tools write every attribute of the template themselves (up to 37 for an activity), then read them back. Check: the values appear in the next simulation's IDF.
+5. **Scripts do not run when a model is only opened.** Under `/process=` scripts are loaded when a calculation starts. Fix: jobs run in the `Before*IdfGeneration` hooks of a heating design calculation, which takes about a minute per job.
+6. **The script editor corrupts code.** It drops non-ASCII characters and rewrites `||` as `_OR_` and `#` as `_HASH_`. Fix: the bridge is kept ASCII only and avoids `||`.
+7. **Each model needs the script installed by hand.** Fix: the `.dsb` format was worked out (a zip archive holding one `.skh` file, with the script stored as a length-prefixed string). `db_update_bridge` replaces an installed script without the user interface, and models made by `db_build_model` inherit the script. Check: three models updated, and each ran a test job afterwards.
+8. **New records got id 0, and the readback still matched.** `Table.GetUniqueId()` returned 0. A copied construction was saved as id 0 and the wall pointed to it; checking the building attributes against the values written could not catch this. Fix: the bridge uses the largest existing id plus one (at least 10000), and the tool rejects ids that are not new. The affected model was restored from its backup.
+9. **Importing a model crashes DesignBuilder.** `Site.ImportXMLFile` during the calculation that loaded the script ends in "Automation error / object variable not set". This happened both before IDF generation and after the calculation. `Save()` returned true but nothing was written, because the model is only written to disk when the batch ends normally. Fix: after the import the bridge calls `SaveAs` and then ends the DesignBuilder process itself.
+10. **`SaveAs` does not write a `.dsb`.** It writes an uncompressed `.skh`, and joins the folder and the file name without a separator. Fix: the tool passes the folder with a trailing backslash and packs the `.skh` into a `.dsb` (zip). Check: the new file opens and runs in DesignBuilder.
+11. **Importing deletes the model's scripts.** The import replaces the whole site, including the `EMSPrograms` records and the `EMSOn` / `EMSId` switches that select the script. Fix: the bridge copies them before the import and writes them back afterwards.
+
+### Model data
+
+12. **Stored U-values in the library are out of date** for many ASHRAE 2013–2019 constructions. Fix: U is computed from the material layers and DesignBuilder's surface resistances, and the stored value is not used.
+13. **Roofs and floors use attributes other than the obvious ones.** In the generated IDF, walls come from `WallConstr`, but flat roofs, exposed floors and ground floors come from `CombinedFlatRoofConstr`, `CombinedExternalFloorConstr` and `CombinedGroundFloorConstr`, not `FlatRoofConstr`. This was found by matching the IDF material layers to the model's construction records.
+14. **Core zones cannot be simulated with the ASHRAE ground floor.** The 2019 baseline slab is an F-factor construction, and DesignBuilder refuses a zone whose ground floor has no exposed perimeter ("has zero exposed perimeter. Replace the F-factor construction with a layered construction"). Fix: those zones get a layered copy of the same slab; the bridge finds them from `Adjacency.ExposedWallGroundFloorLength`. Check: a U-shaped model with one core zone simulated with eight F-factor ground floors.
+15. **New models were lit at 15 W/m².** They inherited DesignBuilder's "Reference" lighting template. Fix: each use gets its ASHRAE 90.1-2019 Table G3.7 lighting template, with the units set to W/m². With the per-100-lux method DesignBuilder would multiply by the target illuminance, which gives 19.7 W/m² for a 500 lux office. Check: the IDF had 11.84 W/m² (office) and 13.99 W/m² (lobby); lighting energy fell by 14%.
+16. **The ASHRAE activity templates use an HVAC availability schedule for lighting.** Most ASHRAE 90.1 templates in the library point their lighting schedule to "ASHRAE 90.1 HVAC Availability - …" (full on throughout the opening hours, about 4,800 hours a year for an office). The laboratory template points to the occupancy schedule. The library also holds the matching "ASHRAE 90.1 Lighting Receptacle - …" schedule, usually with the id one lower (for example 6025 vs 6026), so this looks like an off-by-one error in the library data. Fix: `db_assign_activity` replaces the lighting schedule with the Lighting Receptacle schedule of the same family (18 of the 25 space types) and lists every replacement in its preview. Check: on the U-shaped test model all 18 zones used schedule 6025 in the IDF. Lighting energy fell from 137,849 to 83,942 kWh (−39%) and heating rose from 27,196 to 36,966 kWh, as expected with lower internal gains. The site EUI went from 105 to 84 kWh/m². The remaining lighting energy matches 12.9 W/m² × 2,912 full-load hours.
+
+### Building models from parameters
+
+17. **dragonfly did not expand repeated floors.** `separate_mid_floors` left a four-storey tower as one floor ×2. Fix: repeated floors are copied and moved up one by one, so every floor has real zones.
+18. **Zone names are lost.** The writer used numbers as zone titles. Fix: zones are named `F03 North` / `F03 Core` before writing, and blocks `F03`. Imported zones have no IDF names until the first calculation, so the tools accept zone names as well.
+19. **The floor areas look 5% short.** DesignBuilder reports net floor area (inside the walls), while the massing uses the outline. This is expected and is not treated as an error.
+
+### Results
+
+20. **No hourly output by default.** DesignBuilder requests monthly and run period values only. Setting `HourlyOutput` inside the simulation's own hook only takes effect from the next run. Fix: `db_simulate(hourly=True)` sets it and saves first. Check: the first hourly run of a new model produced 8,760 rows.
+21. **Zones are numbers in the results.** With an evaluation licence the IDF uses zone handles as names, regardless of `IDFNameType`. Fix: every simulation with the bridge saves `zones.json` (handle → zone name).
+22. **Building meters are not in the `.eso`.** EnergyPlus writes them to `eplusout.mtr`, which is now collected too. DesignBuilder also appends `,ON` to some frequencies in the `.eso` dictionary (`!Hourly,ON`), which the reader handles.
+23. **Totals are checked.** For every meter, `db_results` compares the sum of the hourly, daily or monthly values with EnergyPlus's run period value. They have matched in all tests (for example 195,416.7 kWh total electricity).
+
 ## Known limitations
 
-- On this machine DesignBuilder runs as administrator. Every launch shows a Windows UAC prompt, and the tools cannot close DesignBuilder afterwards; the user closes it.
 - Only one DesignBuilder instance can run, so tools that open DesignBuilder refuse to start while it is open.
-- Completion is detected from the time stamps of `eplusout.err` and `eplustbl.htm`. `db_calculate` assumes the `.dsb` is saved when a calculation finishes; this has not been verified.
-- When DesignBuilder stops at a dialog (for example a missing weather file), the tools wait until their timeout and cannot see the dialog.
-- Simulation results stored inside the `.dsb` cannot be read directly, so results are taken from the EnergyPlus output folder.
+- When DesignBuilder stops at a dialog, the tools notice only after 300 seconds without progress, and cannot read the dialog.
+- Every bridge job runs a heating design calculation, which takes about a minute. Building a model and assigning uses takes four to five minutes.
+- A model needs the bridge script before the bridge tools work. It can be installed once in Script Manager, or the model can be created with `db_build_model`. `db_update_bridge` depends on the undocumented `.dsb` layout.
+- New models take their location from the honeybee-designbuilder XML template (San Francisco); there is no tool yet to choose the weather file.
+- Results stored inside the `.dsb` (design loads, daylighting, CFD) cannot be read, and `db_calculate` has not been tested.
+- `db_results` writes CSV only (no `.xlsx`).
 - The bundled engine has no IDF version updater, so IDFs older than 23.1 must be re-exported from DesignBuilder.
 
 ## Questions for DesignBuilder
 
 1. Is `/process=` the recommended way to automate DesignBuilder, or is there a scripting or plugin API that would be more robust?
 2. Is there a supported way to make DesignBuilder exit when a process chain completes, or an official signal that a simulation or calculation has finished?
-3. Is administrator mode required, or can DesignBuilder run normally as a standard user?
-4. Can simulation results stored in the `.dsb` be exported (for example to CSV or SQL) from the command line?
-5. For heating and cooling design, daylighting and CFD run through `/process=`, how can completion be detected, and can the results be exported?
-6. Can dialogs be suppressed during automated runs, or written to a log instead?
-7. Is it acceptable to call the bundled `energyplusapi.dll` directly, as described above, on a machine with a valid DesignBuilder licence? Is there anything in the licence terms we should be aware of?
+3. Can simulation results stored in the `.dsb` be exported (for example to CSV or SQL) from the command line?
+4. For heating and cooling design, daylighting and CFD run through `/process=`, how can completion be detected, and can the results be exported?
+5. Can dialogs be suppressed during automated runs, or written to a log instead?
+6. Is there a supported way to load a template's values through the API (problem 4), to import a dsbXML file from a script without the crash in problem 9, and to install a script in a model without the user interface?
+7. Is `Table.GetUniqueId()` expected to return 0 (problem 8)?
+8. Are the lighting schedules of the ASHRAE 90.1 activity templates intentional (problem 16)?
+9. Is it acceptable to call the bundled `energyplusapi.dll` directly, as described above, on a machine with a valid DesignBuilder licence? Is there anything in the licence terms we should be aware of?
