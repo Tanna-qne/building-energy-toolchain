@@ -24,6 +24,32 @@ ENVELOPE_FIELDS = {"外牆": "wall_u", "屋頂": "roof_u", "外挑樓板": "floo
 LOAD_KIND = {"供暖": "heating", "製冷": "cooling", "熱水": "dhw"}
 
 
+def actual_wwr(htm: Path):
+    """EnergyPlus 報表的 Window-Wall Ratio 表 → {North/East/South/West: 實際窗牆比}; 讀不到回傳 {}。"""
+    import html as _html
+    t = htm.read_text(encoding="latin-1", errors="replace")
+    i = t.find("Window-Wall Ratio")
+    if i < 0:
+        return {}
+    head, ratio = None, None
+    for row in re.findall(r"<tr>(.*?)</tr>", t[i:i + 8000], re.S):
+        cells = [_html.unescape(re.sub("<.*?>", "", c)).strip() for c in re.findall(r"<t[dh][^>]*>(.*?)</t[dh]>", row, re.S)]
+        if head is None and "Total" in cells:
+            head = cells
+        elif head and cells and cells[0].startswith("Gross Window-Wall Ratio"):
+            ratio = cells
+            break
+    if not (head and ratio):
+        return {}
+    out = {}
+    for h, v in zip(head[2:], ratio[2:]):
+        try:
+            out[h.split()[0]] = round(float(v) / 100, 3)
+        except ValueError:
+            pass
+    return out
+
+
 def delivered_energy(sim_out, hvac):
     """理想負載(區域冷熱)→ 實際的電與天然氣: 冷熱需求 ÷ 空調範本的季節效率, 熱水需求 ÷ 熱水效率;
     照明、設備等原本就是電, 照原值。和 DB 簡易空調的結果畫面同一算法; 不含風機與水泵(簡易空調不模擬)。"""
@@ -143,7 +169,7 @@ def form_to_params(form):
     m = {"name": name, "shape": shape, "uses": parse_uses(form.get("uses", "")),
          "default_use": str(form.get("default_use", "") or "辦公").strip()}
     dblibrary.resolve_space(m["default_use"])
-    for k in ("floor_height", "wwr"):
+    for k in ("floor_height", "wwr", "rotation", "wwr_north", "wwr_east", "wwr_south", "wwr_west"):
         v = _f(form, k, required=False)
         if v is not None:
             m[k] = v
@@ -214,6 +240,7 @@ def run(form):
         info = json.loads((dsb.parent / f"{m['name']}_zones.json").read_text(encoding="utf-8"))
         out["model"] = {"dsb": str(dsb), "plans_html": info["plans"], "floors": info["floors"],
                         "zones": len(info["zones"]), "floor_m2_outline": info["floor_m2"],
+                        "rotation_deg": info.get("rotation", 0), "wwr_by_facade": info.get("wwr_by_facade"),
                         "uses_by_floor": {z["block"]: z["use"] for z in info["zones"]}}
     else:
         dsb = server._working_copy(p["dsb_path"])
@@ -264,6 +291,14 @@ def run(form):
                          "peak_electricity_kW": round(s["peak_elec_kW"], 1), "peak_time": s["peak_elec_time"],
                          "unmet_heating_h": s["unmet_heating_h"], "unmet_cooling_h": s["unmet_cooling_h"],
                          "district_loads": any("District" in k for k in s["by_fuel_kWh"])}
+    wwr_sim = actual_wwr(sim / "eplustbl.htm")
+    if wwr_sim:
+        out["simulation"]["wwr_by_facade_simulated"] = wwr_sim
+        want = (out.get("model") or {}).get("wwr_by_facade") or {}
+        off = [f"{d} 指定 {want[d]:.0%}、模擬實際 {wwr_sim[d]:.0%}" for d in want
+               if d in wwr_sim and abs(want[d] - wwr_sim[d]) > 0.03]
+        if off:
+            warnings.append("DesignBuilder 匯入時重排了窗戶,窗牆比和指定值不同(結果以模擬實際值為準):" + ";".join(off))
     if out["simulation"]["district_loads"]:
         d = delivered_energy(out["simulation"], hvac)
         warnings += d.pop("problems")

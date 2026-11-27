@@ -1317,7 +1317,8 @@ def db_build_model(params: dict, template_dsb: str = "", location: str = "") -> 
             podium_tower: podium {width, depth, stories, floor_height}, tower {width, depth, stories,
                 floor_height, offset_x, offset_y}(塔樓預設置中, offset 從置中位置平移)
             其他: stories(預設 1), floor_height(預設 3.6), wwr 窗牆比(預設 0.4),
-            uses 各層用途 {"1": "大廳", "2-5": "辦公", "6-": "會議"}, default_use(預設 辦公), perimeter_depth(預設 4.5)
+            wwr_north / wwr_east / wwr_south / wwr_west 各立面窗牆比(選填, 依轉向後的實際朝向),
+            rotation 朝向(從正北順時針轉的角度, 預設 0), uses 各層用途 {"1": "大廳", "2-5": "辦公", "6-": "會議"}, default_use(預設 辦公), perimeter_depth(預設 4.5)
             用途只能用 db_zones 列出的中文用途; 數值都由 DB 範本庫帶入
         template_dsb: 裝好 DbMcpBridge 的模型(第一次需要, 之後沿用)
         location: 選填, 地點範本編號(db_find_locations 找); 不給時用匯入範本的地點(舊金山)。氣象檔要已在本機

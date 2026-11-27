@@ -291,6 +291,26 @@ workflow:
           label: 窗牆比(0–1,預設 0.4)
           type: number
           required: false
+        - variable: rotation
+          label: 朝向:從正北順時針轉幾度(預設 0 = 長邊朝南北;90 = 長邊朝東西)
+          type: number
+          required: false
+        - variable: wwr_north
+          label: 北面窗牆比 0–1(不填用上面的窗牆比)
+          type: number
+          required: false
+        - variable: wwr_east
+          label: 東面窗牆比 0–1(不填用上面的窗牆比)
+          type: number
+          required: false
+        - variable: wwr_south
+          label: 南面窗牆比 0–1(不填用上面的窗牆比)
+          type: number
+          required: false
+        - variable: wwr_west
+          label: 西面窗牆比 0–1(不填用上面的窗牆比)
+          type: number
+          required: false
         - variable: wall_u
           label: 外牆 U 值 W/m²K(有實際數據才填;不填用 ASHRAE 基準)
           type: number
@@ -373,7 +393,7 @@ workflow:
           import json
 
           def main(mode, location, building_type, hvac, run_measures, name, shape, width, depth, stories, uses,
-                   floor_height, wwr, wall_u, roof_u, floor_u, window_u, window_shgc,
+                   floor_height, wwr, rotation, wwr_north, wwr_east, wwr_south, wwr_west, wall_u, roof_u, floor_u, window_u, window_shgc,
                    notch_width, notch_depth, stem_width, bar_depth, court_width, court_depth,
                    tower_width, tower_depth, tower_stories, dsb_path, apply_constructions) -> dict:
               form = dict(locals())
@@ -411,6 +431,16 @@ workflow:
           value_selector: [start, floor_height]
         - variable: wwr
           value_selector: [start, wwr]
+        - variable: rotation
+          value_selector: [start, rotation]
+        - variable: wwr_north
+          value_selector: [start, wwr_north]
+        - variable: wwr_east
+          value_selector: [start, wwr_east]
+        - variable: wwr_south
+          value_selector: [start, wwr_south]
+        - variable: wwr_west
+          value_selector: [start, wwr_west]
         - variable: wall_u
           value_selector: [start, wall_u]
         - variable: roof_u
@@ -766,7 +796,9 @@ workflow:
             1. 只能用 JSON 裡有的數字,不要自己估算、補數字或推測沒有的資料;需要的資料沒有就寫「這次沒有算」。
             2. 先一句話結論(全年用能與單位面積能耗、最大的用能項目、最值得做的節能措施)。JSON 有 delivered 時,
                結論與用能數字以 delivered(實際的電與天然氣)為主;simulation 的分項是「建築需要的冷熱量」,放在後面當參考。
-            3. 依序:建築與條件(量體、各層用途、地點與氣候區、構造基準、空調系統 hvac)→ 全年用能與分項(表格;有 delivered 時
+            3. 依序:建築與條件(量體、朝向 model.rotation_deg、各立面窗牆比(以 simulation.wwr_by_facade_simulated 為準,
+               和 model.wwr_by_facade 不同時兩個都列)、各層用途、地點與氣候區、
+               構造基準、空調系統 hvac)→ 全年用能與分項(表格;有 delivered 時
                列出每項的燃料、冷熱需求、效率、實際用量)→ 依燃料合計(電、天然氣)→ 尖峰用電與溫度不達標時數 →
                節能措施 → 模型與檔案位置 → 注意事項。
                有 delivered 時在注意事項寫出 delivered.method(換算方式,不含風機與水泵)。

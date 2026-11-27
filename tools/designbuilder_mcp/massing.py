@@ -5,7 +5,8 @@
 只做常見量體: rect 矩形、L、U(開口朝北)、T(橫翼在北)、courtyard 回字、podium_tower 裙樓加塔樓。
 每層切 4.5 m 周邊區加一個核心區(ASHRAE / DOE 原型建築的做法), 翼太窄時整層一區。
 熱區名稱 "F03 North" / "F03 Core", 區塊(樓層)名稱 "F03"; 用途只寫進熱區清單, 由 MCP 匯入 DB 後再用 DB 範本庫套用。
-座標: x 向東、y 向北, 原點在量體西南角(裙樓加塔樓時在裙樓西南角)。
+座標: x 向東、y 向北, 原點在量體西南角(裙樓加塔樓時在裙樓西南角)。rotation 給角度時整棟繞原點順時針轉,
+形狀說明裡的「北側」等方位是轉之前的; 熱區名稱的朝向與各立面窗牆比依轉之後的實際朝向。
 """
 import html
 import json
@@ -32,7 +33,10 @@ SHAPES = {
     "courtyard": ("width", "depth", "court_width", "court_depth"),  # 中央天井
     "podium_tower": ("podium", "tower"),
 }
-DEFAULTS = {"stories": 1, "floor_height": 3.6, "wwr": 0.4, "perimeter_depth": 4.5, "uses": {}, "default_use": "辦公"}
+DEFAULTS = {"stories": 1, "floor_height": 3.6, "wwr": 0.4, "perimeter_depth": 4.5, "uses": {}, "default_use": "辦公",
+            "rotation": 0}
+DIRECTIONS = ("North", "East", "South", "West")
+WWR_KEYS = {"North": "wwr_north", "East": "wwr_east", "South": "wwr_south", "West": "wwr_west"}  # 各立面窗牆比(選填)
 TOWER_KEYS = ("width", "depth", "stories")
 
 
@@ -130,7 +134,33 @@ def _direction(room):
             best, best_len = ori, seg.length
     if best is None:
         return "Core"
-    return ("North", "East", "South", "West")[int(((best + 45) % 360) // 90)]
+    return _facing(best)
+
+
+def _facing(angle):
+    """牆面朝向角度(北 0°、東 90°)→ 四個方位之一; 正好 45° 時歸到順時針那一側。"""
+    return DIRECTIONS[int(((angle + 45) % 360) // 90)]
+
+
+def _rotate(pts, deg):
+    """平面點繞原點順時針轉 deg 度(建築朝向: 正值 = 從正北往東轉)。"""
+    import math
+    a = math.radians(deg)
+    c, s = math.cos(a), math.sin(a)
+    return [(x * c + y * s, -x * s + y * c) for x, y in pts]
+
+
+def _wwr(p):
+    """→ {方位: 窗牆比}; 各立面沒給的用整棟的 wwr。"""
+    out = {}
+    for d, k in WWR_KEYS.items():
+        v = p.get(k, p["wwr"])
+        if v is None:
+            v = p["wwr"]
+        if isinstance(v, bool) or not isinstance(v, (int, float)) or not 0 <= v < 1:
+            raise ValueError(f"{k}(窗牆比)要在 0 到 1 之間, 例如 0.4, 收到 {v!r}")
+        out[d] = float(v)
+    return out
 
 
 def build(p):
@@ -140,14 +170,18 @@ def build(p):
         raise ValueError(f"name 只能用英文、數字、底線、減號(會變成檔名), 收到 {name!r}")
     if isinstance(p["wwr"], bool) or not isinstance(p["wwr"], (int, float)) or not 0 <= p["wwr"] < 1:
         raise ValueError(f"wwr(窗牆比)要在 0 到 1 之間, 例如 0.4, 收到 {p['wwr']!r}")
+    wwr = _wwr(p)
+    rot = p.get("rotation") or 0
+    if isinstance(rot, bool) or not isinstance(rot, (int, float)) or not -360 < rot < 360:
+        raise ValueError(f"rotation(朝向)是從正北順時針轉的角度, 例如 0、45、90, 收到 {rot!r}")
     floors, heights, narrow = plates(p)
     depth = float(p["perimeter_depth"])
     # 翼寬要容得下兩側周邊區再加至少 3 m 核心, 不然切出很窄的核心區; 這時整層一區
     offset = depth if narrow >= 2 * depth + 3 else 0
     geo, z = [], 0.0
     for plate, h in zip(floors, heights):
-        geo.append([Face3D([Point3D(x, y, z) for x, y in pts],
-                           holes=[[Point3D(x, y, z) for x, y in hole] for hole in holes] or None)
+        geo.append([Face3D([Point3D(x, y, z) for x, y in _rotate(pts, rot)],
+                           holes=[[Point3D(x, y, z) for x, y in _rotate(hole, rot)] for hole in holes] or None)
                     for pts, holes in plate])
         z += h
     merged = Building.from_all_story_geometry(name, geo, heights, perimeter_offset=offset, tolerance=0.01)
@@ -173,7 +207,15 @@ def build(p):
         upper.set_ground_contact(False)
         lower.set_top_exposed_by_story_above(upper)
     stories[-1].set_top_exposed(True)
-    bldg.set_outdoor_window_parameters(SimpleWindowRatio(p["wwr"]))
+    # 每面外牆依實際朝向(轉過之後)給窗牆比; 0 = 不開窗
+    for story in stories:
+        for room in story.room_2ds:
+            wps = list(room.window_parameters)
+            for i, (bc, ori) in enumerate(zip(room.boundary_conditions, room.segment_orientations())):
+                if bc.__class__.__name__ == "Outdoors":
+                    r = wwr[_facing(ori)]
+                    wps[i] = SimpleWindowRatio(r) if r > 0 else None
+            room.window_parameters = wps
 
     zones = []
     for n, story in enumerate(stories, start=1):
@@ -247,13 +289,17 @@ def plan_html(p, zones, offset):
     legend = " ".join(f'<span style="background:{c};opacity:.6;padding:2px 8px;margin-right:6px">{html.escape(u)}</span>'
                       for u, c in palette.items())
     total = sum(z_["area_m2"] for z_ in zones)
+    w_by = _wwr(p)
+    names = {"North": "北", "East": "東", "South": "南", "West": "西"}
+    wwr_text = (f"{p['wwr']:.0%}" if len(set(w_by.values())) == 1 else
+                "、".join(f"{names[d]} {v:.0%}" for d, v in w_by.items()))
     note = (f"每層切 {offset:g} m 周邊區加核心區" if offset else
             f"翼寬不足以切周邊區({p['perimeter_depth']:g} m × 2 + 3 m 核心),每層一區")
     return f"""<!doctype html><meta charset="utf-8"><title>{html.escape(p['name'])} 分區圖</title>
 <style>body{{font-family:system-ui,sans-serif;margin:16px;color:#222}}table{{border-collapse:collapse}}
 td,th{{border:1px solid #ccc;padding:3px 8px}}h2{{font-size:15px;margin:18px 0 4px}}</style>
 <h1 style="font-size:18px">{html.escape(p['name'])}:{p['shape']},{len(floors)} 層,{len(zones)} 個熱區,{total:,.0f} m²</h1>
-<p>{note};窗牆比 {p['wwr']:.0%}。x 向東、y 向北。{legend}</p>{''.join(parts)}
+<p>{note};窗牆比 {wwr_text};朝向:{'正南北' if not p.get('rotation') else f"從正北順時針轉 {p['rotation']:g}°"}。圖的上方是北。{legend}</p>{''.join(parts)}
 <h2>熱區表</h2><table><tr><th>熱區</th><th>用途</th><th>朝向</th><th>面積 m²</th></tr>{rows}</table>"""
 
 
@@ -269,6 +315,7 @@ def main():
     plans = out_dir / f"{p['name']}_分區圖.html"
     plans.write_text(plan_html(p, zones, offset), encoding="utf-8")
     info = {"xml": str(xml), "plans": str(plans), "zones": zones, "perimeter_offset": offset,
+            "rotation": p.get("rotation") or 0, "wwr_by_facade": _wwr(p),
             "floors": max(z_["floor"] for z_ in zones), "floor_m2": round(sum(z_["area_m2"] for z_ in zones), 1)}
     (out_dir / f"{p['name']}_zones.json").write_text(json.dumps(info, ensure_ascii=False, indent=1), encoding="utf-8")
     print(json.dumps({k: v for k, v in info.items() if k != "zones"} | {"zone_count": len(zones)}, ensure_ascii=False))
