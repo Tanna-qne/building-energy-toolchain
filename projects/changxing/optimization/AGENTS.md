@@ -5,6 +5,6 @@
 - 保留输入数据和结果的来源、时区、单位与版本。`load_kWh` 已包含充电负荷，模拟数据不能称为实测数据。
 - 区分电网补充前的负荷缺口、实际缺供电与光伏富余；不能用尚未确定的接网能力推断缺电率。
 - 保持设备容量与电量的单位一致，明确充放电效率、功率限制、初始和期末储能状态。
-- 现有 240 kWh／120 kW 电池只是固定试算，不得表述为优化结果；风电、氢储能、成本和 NSGA-II 尚待实现。
-- 修改现有调度时，运行 `python3 tests/verify_reference.py`，并在有 MATLAB 时运行 `test_changxing_pv_balance`。如有意改变参数或输入，同步更新参考结果与说明。
+- 现有 240 kWh／120 kW 电池和氢能设备参数（电解槽 100 kW／50 kWh·kg⁻¹、储氢罐 200 kg、燃料电池 100 kW／18 kWh·kg⁻¹）只是固定试算假设，不得表述为优化结果；风电时序、成本模型和 NSGA-II 尚待实现。
+- 修改现有调度时，运行 `python3 tests/verify_reference.py` 和 `python3 tests/verify_dispatch.py`，并在有 MATLAB 时运行 `test_changxing_pv_balance` 与 `test_changxing_dispatch`。如有意改变参数或输入，同步更新参考结果与说明。
 - 不凭空填造模型参数、文献来源或实验结果。明确标注假设与模型适用范围；论文中数据来源说明保留一行。

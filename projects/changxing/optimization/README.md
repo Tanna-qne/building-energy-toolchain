@@ -26,7 +26,7 @@ addpath('matlab');
 writetable(hourly, 'july_balance_hourly.csv');
 ```
 
-基础计算使用 MATLAB 自带的表格、日期和绘图功能，不需要额外优化工具箱。当前版本已用 Python 复核计算，尚未在 MATLAB 环境实跑。
+基础计算使用 MATLAB 自带的表格、日期和绘图功能，不需要额外优化工具箱。该版本已在 MATLAB R2026b（26.2.0.3433840）实跑：`test_changxing_pv_balance` 对 744 小时逐项比对通过，最大逐时能量残差 `1.14e-13 kWh`。
 
 ## 检查计算
 
@@ -65,10 +65,43 @@ python3 tests/verify_reference.py
 
 示例的期初和期末 SOC 均为 10%。两组电量差异包含充放电损耗，不包含电池投资或电价。
 
+## 风光储氢逐时运行（新增）
+
+`matlab/changxing_dispatch.m` 在上一节的基础上接入氢能环节，按任务书的运行规则调度：
+
+1. 新能源（光伏，若输入含风电列则含风电）优先供负荷；
+2. 富余电量先给锂电池充电；
+3. 电池充满后仍富余的电量送入电解槽制氢；
+4. 供电不足时电池先放电，再由燃料电池补足，其余由电网补充。
+
+```matlab
+addpath('matlab');
+[hourly, summary, parameters] = changxing_dispatch;          % 默认读取 data/july_load_pv.csv
+[hourly, summary] = changxing_dispatch('data/july_load_pv.csv', false);   % 不画图
+```
+
+设备参数集中在 `matlab/changxing_parameters.m`，**全部是用于打通调度逻辑的示例假设**，不是设备手册值、不是文献值、更不是优化结果；电解槽 100 kW／50 kWh·kg⁻¹、储氢罐 200 kg、燃料电池 100 kW／18 kWh·kg⁻¹ 都需要换成实际选型参数后另行计算。
+
+7 月情景（风电列为 0，因为目前没有长兴风电数据）：
+
+| 指标 | 数值 |
+|---|---:|
+| 负荷 | 442,092.78 kWh |
+| 可用新能源 | 138,570.63 kWh |
+| 新能源直供负荷 | 128,489.13 kWh |
+| 电池放电 | 2,978.58 kWh |
+| 燃料电池发电 | 1,021.69 kWh |
+| 电网补充 | 309,603.38 kWh |
+| 电解槽耗电 / 制氢 | 2,838.04 kWh / 56.76 kg |
+| 弃电 | 3,566.20 kWh |
+| 新能源供电占比 | 29.97% |
+
+与只有电池的方案相比，电网补充从 310,625.07 降到 309,603.38 kWh，弃电从 6,404.24 降到 3,566.20 kWh —— 但这是示例容量下的调度差异，**不能据此得出储氢容量结论**。接入风电（输入 CSV 增加 `wind_kWh` 列）后才能做风光储氢的对比。
+
 ## 目录
 
-- `matlab/`：MATLAB 逐时计算入口。
+- `matlab/`：MATLAB 逐时计算入口，`changxing_pv_balance.m`（光伏＋电池）与 `changxing_dispatch.m`（风光＋电池＋氢储）。设备参数在 `changxing_parameters.m`。
 - `data/`：固定版本的模型输入。
-- `tests/`：逐时参考结果和核对脚本。
+- `tests/`：逐时参考结果和核对脚本，`verify_reference.py`／`verify_dispatch.py` 为独立的 Python 复核。
 - `HANDOFF.md`：模型边界、待完成工作与交接重点。
 - `AGENTS.md`：后续代码协作中需要遵循的项目约定。
