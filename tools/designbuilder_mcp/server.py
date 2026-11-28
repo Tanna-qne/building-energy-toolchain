@@ -4,7 +4,7 @@
 - db-process(DesignBuilder 官方): /process= 指令鏈與找 DesignBuilder.exe
 - 匯出的 dsbXML 用標準 XML 讀(格式見 DesignBuilder 官方 db-dsbxml-schema)
 - honeybee-designbuilder(Ladybug Tools): 參數 -> DB 模型(params_to_dsbxml.py)
-- 節能措施報告沿用工作區的 tools/designbuilder/from_db.py
+- 節能措施報告沿用 building-energy-toolchain 的 tools/designbuilder/from_db.py(選用, 見下方 DBMCP_TOOLCHAIN)
 
 DB 一次只能開一個; 工具在 DB 開著時會拒絕執行, 不會關掉使用者的視窗。
 操作一律用模型的副本(db_models/dbmcp/<模型名>/), 不改使用者原本的 .dsb。
@@ -34,25 +34,39 @@ from typing import Optional
 
 HERE = Path(__file__).resolve().parent
 site.addsitedir(str(HERE / ".venv" / "Lib" / "site-packages"))  # addsitedir 會處理 .pth(pywin32 需要)
-sys.path[:0] = [str(HERE.parent), str(HERE.parents[1])]
-from building_report import MEASURES, num, verdict, yrs  # noqa: E402  白話措施名稱與「值不值得做」的判讀
-from eplus_summary import summarize, to_markdown  # noqa: E402
 sys.path.insert(0, str(HERE))
 import dblibrary  # noqa: E402  DB 本機範本庫(活動範本、作息、構造)
 import results  # noqa: E402  讀 eplusout.eso / .mtr 的逐時、逐熱區結果
+from eplus_summary import summarize, to_markdown  # noqa: E402
+
+# 這個資料夾是獨立的 designbuilder-mcp 倉庫; 放在 building-energy-toolchain 的 tools/designbuilder_mcp 時,
+# 節能措施報告(scan2 + EnergyPlus-MCP)與建模環境(tools/modeler)用主倉庫的。單獨使用時用環境變數指定:
+#   DBMCP_TOOLCHAIN  building-energy-toolchain 的位置(選用; 沒有就不能跑節能措施)
+#   DBMCP_WORK       模型副本與模擬結果的資料夾(預設: 主倉庫的 db_models/dbmcp, 否則這裡的 work/)
+#   DBMCP_MODELER_PYTHON  有 dragonfly / honeybee-designbuilder 的 Python(參數建模用)
+TOOLCHAIN = Path(os.environ.get("DBMCP_TOOLCHAIN") or HERE.parents[1])
+HAS_TOOLCHAIN = (TOOLCHAIN / "building_report.py").exists() and (TOOLCHAIN / "tools" / "designbuilder" / "from_db.py").exists()
+if HAS_TOOLCHAIN:
+    sys.path.append(str(TOOLCHAIN))
+    from building_report import MEASURES, num, verdict, yrs  # noqa: E402  白話措施名稱與「值不值得做」的判讀
+else:
+    MEASURES, num, verdict, yrs = {}, None, None, None
+TOOLCHAIN_NOTE = ("節能措施需要 building-energy-toolchain(https://github.com/Tanna-qne/building-energy-toolchain);"
+                  "把這個倉庫放在它的 tools/designbuilder_mcp,或用環境變數 DBMCP_TOOLCHAIN 指到它")
 
 from db_process import ProcessChain, Screen, find_designbuilder, is_running, kill_process  # noqa: E402
 from mcp.server.fastmcp import FastMCP  # noqa: E402
 
-WS = HERE.parents[1]
-WORK = WS / "db_models" / "dbmcp"
+WS = TOOLCHAIN if HAS_TOOLCHAIN else HERE
+WORK = Path(os.environ.get("DBMCP_WORK") or (TOOLCHAIN / "db_models" / "dbmcp" if HAS_TOOLCHAIN else HERE / "work"))
 DB_EP_DIR = Path(os.environ["LOCALAPPDATA"]) / "DesignBuilder" / "EnergyPlus"
 # 跑節能報告(from_db.py)的 Python: 預設是 DSH 內建 runtime, 可用環境變數 REPORT_PYTHON 指定
 MAIN_PY = Path(os.environ.get("REPORT_PYTHON") or
                Path.home() / ".dsh/dsh-runtimes/dsh-primary-runtime/dependencies/python/python.exe")
-# 參數 → dsbXML 用建模環境: 官方 26.2 配的 .venv, 或只用 DesignBuilder 引擎時的 .venv231(安裝.bat 建的)
-MODELER_PY = next((p for p in (WS / "tools" / "modeler" / v / "Scripts" / "python.exe" for v in (".venv", ".venv231"))
-                   if p.exists()), WS / "tools" / "modeler" / ".venv" / "Scripts" / "python.exe")
+# 參數 → dsbXML 用建模環境: 主倉庫官方 26.2 配的 .venv, 或只用 DesignBuilder 引擎時的 .venv231(安裝.bat 建的)
+MODELER_PY = Path(os.environ.get("DBMCP_MODELER_PYTHON") or next(
+    (p for p in (TOOLCHAIN / "tools" / "modeler" / v / "Scripts" / "python.exe" for v in (".venv", ".venv231"))
+     if p.exists()), TOOLCHAIN / "tools" / "modeler" / ".venv" / "Scripts" / "python.exe"))
 EP_OUTPUTS = ("in.idf", "eplusout.err", "eplustbl.htm", "eplusout.eso", "eplusout.mtr")
 
 # 常看的建築層屬性(ChangeAttributeValue 用同一組名稱)
@@ -485,6 +499,8 @@ def db_measures_report(output_dir: str) -> str:
         output_dir: db_simulate 回傳的 output_dir
     Returns: 報告會出現的位置; 用 db_report_status 查進度。
     """
+    if not HAS_TOOLCHAIN:
+        raise ValueError(TOOLCHAIN_NOTE)
     d = _guard(output_dir)
     if not (d / "in.idf").exists():
         raise ValueError(f"{d} 沒有 in.idf; 先用 db_simulate 跑一次")
@@ -1438,7 +1454,10 @@ def db_create_model(params: dict) -> str:
     name、width、depth 必填(m); 可選 shape(rect / L, L 要 notch_width、notch_depth)、stories、floor_height、
     wwr、building_type、climate_zone、construction、construction_vintage、hvac。
     產生的 XML 讓使用者在 DB 用 File > Import > Import model from XML 匯入(或用 db_open 打開)。
+    需要 building-energy-toolchain 的 tools/modeler; 只用這個倉庫時改用 db_build_model。
     """
+    if not (TOOLCHAIN / "tools" / "modeler" / "build_idf.py").exists():
+        raise ValueError("db_create_model 需要 building-energy-toolchain 的 tools/modeler;請改用 db_build_model")
     name = str(params.get("name", ""))
     out_dir = WORK / (re.sub(r"[^A-Za-z0-9_-]+", "_", name) or "model")
     out_dir.mkdir(parents=True, exist_ok=True)

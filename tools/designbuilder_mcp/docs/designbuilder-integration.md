@@ -1,6 +1,6 @@
 # DesignBuilder integration: MCP server, desktop app and bundled EnergyPlus
 
-This page describes how this repository automates DesignBuilder 2025.1 and reuses the EnergyPlus engine that ships with it. It is written for the DesignBuilder support team, to accompany a request for feedback. The rest of the repository is documented in Chinese; this page is self-contained.
+This page describes the DesignBuilder MCP server in this repository, and how it works together with [building-energy-toolchain](https://github.com/Tanna-qne/building-energy-toolchain) (retrofit measures, desktop app, installer) and the EnergyPlus engine that ships with DesignBuilder 2025.1. It is written for the DesignBuilder support team, to accompany a request for feedback. A Chinese user guide is in the README.
 
 ## What it is for
 
@@ -10,12 +10,12 @@ The user builds and edits models in DesignBuilder. An AI assistant (through the 
 
 | Component | File | Role |
 |---|---|---|
-| DesignBuilder MCP server | [tools/designbuilder_mcp/server.py](../tools/designbuilder_mcp/server.py) | Twenty-two tools that drive DesignBuilder through the official [db-process](https://github.com/DesignBuilderSoftware/db-process) command line (`/process=`) |
-| Command-line runner | [tools/designbuilder_mcp/cli.py](../tools/designbuilder_mcp/cli.py) | The same chain without an assistant: simulate a `.dsb`, then run the measures report |
-| Desktop app | [tools/app/app.py](../tools/app/app.py) | Pick a `.dsb` / `.idf`, or enter a few building parameters, choose weather, run, open the report |
-| Engine adapter | [tools/dbengine/](../tools/dbengine/) | Makes DesignBuilder's bundled EnergyPlus usable from the command line (see below) |
-| EnergyPlus-MCP | [LBNL-ETA/EnergyPlus-MCP](https://github.com/LBNL-ETA/EnergyPlus-MCP) + [local patch](../tools/energyplus_mcp/energyplus-mcp.patch) | Applies the retrofit measures to the exported IDF and runs the simulations |
-| Installer | [安裝.bat](../安裝.bat) → [tools/setup/install.py](../tools/setup/install.py) | One-click setup on a machine with DesignBuilder; optional MCP registration |
+| DesignBuilder MCP server | [server.py](../server.py) | Twenty-two tools that drive DesignBuilder through the official [db-process](https://github.com/DesignBuilderSoftware/db-process) command line (`/process=`) |
+| Command-line runner | [cli.py](../cli.py) | The same chain without an assistant: simulate a `.dsb`, then run the measures report |
+| Desktop app | [tools/app/app.py](https://github.com/Tanna-qne/building-energy-toolchain/blob/main/tools/app/app.py) | Pick a `.dsb` / `.idf`, or enter a few building parameters, choose weather, run, open the report |
+| Engine adapter | [tools/dbengine/](https://github.com/Tanna-qne/building-energy-toolchain/tree/main/tools/dbengine) | Makes DesignBuilder's bundled EnergyPlus usable from the command line (see below) |
+| EnergyPlus-MCP | [LBNL-ETA/EnergyPlus-MCP](https://github.com/LBNL-ETA/EnergyPlus-MCP) + [local patch](https://github.com/Tanna-qne/building-energy-toolchain/blob/main/tools/energyplus_mcp/energyplus-mcp.patch) | Applies the retrofit measures to the exported IDF and runs the simulations |
+| Installer | [安裝.bat](https://github.com/Tanna-qne/building-energy-toolchain/blob/main/安裝.bat) → [tools/setup/install.py](https://github.com/Tanna-qne/building-energy-toolchain/blob/main/tools/setup/install.py) | One-click setup on a machine with DesignBuilder; optional MCP registration |
 
 ## DesignBuilder MCP tools
 
@@ -44,7 +44,7 @@ All operations work on a copy of the user's model in `db_models/dbmcp/<model>/`;
 | `db_job_start` / `db_job_status` | Run any of the DesignBuilder tools above as a background job and check on it; jobs run one at a time and their results are kept on disk | — | Yes (2026-11-27) |
 | `db_update_bridge` | Replaces an installed DbMcpBridge script inside a model with the repository version, without opening DesignBuilder's user interface, then runs a test job | Optional test (headless) | Yes (2026-11-26) |
 
-`db_zones` and `db_assign_activity` use [DbMcpBridge.cs](../tools/designbuilder_mcp/DbMcpBridge.cs), a C# script that the model must contain: it is added once in Script Manager, or inherited by models made with `db_build_model` (see problems 7 and 11 below). Under `/process=` DesignBuilder loads scripts only when a calculation starts, so the job runs in the `Before*IdfGeneration` hooks of a heating design run (about one minute). Setting `ActivityTemplateId` through the API does not load the template's values (the user interface does), so the tool writes up to 37 activity attributes from DesignBuilder's own template library. Tested on the Model Geometry Example: three zones changed, 114 attributes written and read back, and the next annual simulation's IDF used the new occupancy densities and schedules.
+`db_zones` and `db_assign_activity` use [DbMcpBridge.cs](../DbMcpBridge.cs), a C# script that the model must contain: it is added once in Script Manager, or inherited by models made with `db_build_model` (see problems 7 and 11 below). Under `/process=` DesignBuilder loads scripts only when a calculation starts, so the job runs in the `Before*IdfGeneration` hooks of a heating design run (about one minute). Setting `ActivityTemplateId` through the API does not load the template's values (the user interface does), so the tool writes up to 37 activity attributes from DesignBuilder's own template library. Tested on the Model Geometry Example: three zones changed, 114 attributes written and read back, and the next annual simulation's IDF used the new occupancy densities and schedules.
 
 `db_assign_activity` also sets lighting. Each space type maps to an ASHRAE 90.1-2019 Table G3.7 lighting template from DesignBuilder's library, for example 11.84 W/m² for an open plan office. The tool writes that template and its values, and sets `FluorescentLightingUnits` to `1-Watts per m2`. With the per-100-lux method, DesignBuilder would multiply by the activity's target illuminance: the templates' W/m²-100 lux values are the W/m² values divided by 3, i.e. based on 300 lux. New models otherwise inherit DesignBuilder's "Reference" lighting template (15 W/m²).
 
@@ -55,7 +55,7 @@ The schedule and construction tools take their values only from DesignBuilder's 
 - `Table.GetUniqueId()` returned 0, so the bridge gives a new record the largest existing id plus one (at least 10000).
 - After applying the CZ4 baseline with a wall target of U 0.4, the annual simulation's IDF had a 76 mm wall insulation layer, the ASHRAE roof and floor layers, an F-factor ground floor, glazing U 3.24 and SHGC 0.39, 0.7 ach infiltration and the newly assigned occupancy and hot water schedules.
 
-`db_build_model` generates the massing with [dragonfly](https://github.com/ladybug-tools/dragonfly-core) and writes dsbXML with honeybee-designbuilder ([massing.py](../tools/designbuilder_mcp/massing.py)). The bridge then imports it into a copy of a template model that already contains DbMcpBridge (`Site.ImportXMLFile`) and saves it under the new name (`DocumentFileOperations.SaveAs`). Three findings from testing:
+`db_build_model` generates the massing with [dragonfly](https://github.com/ladybug-tools/dragonfly-core) and writes dsbXML with honeybee-designbuilder ([massing.py](../massing.py)). The bridge then imports it into a copy of a template model that already contains DbMcpBridge (`Site.ImportXMLFile`) and saves it under the new name (`DocumentFileOperations.SaveAs`). Three findings from testing:
 
 - Importing replaces the whole site, including the model's own scripts (`EMSPrograms` records from 10000) and the `EMSOn` / `EMSId` building attributes that select them. The bridge keeps these and writes them back after the import, so the new model can be used with the bridge tools straight away, without a manual install.
 - If the calculation that loaded the script keeps running after the import, DesignBuilder fails ("Automation error"). This happens both before IDF generation and after the calculation. The bridge therefore ends the DesignBuilder process once the job output is written.
@@ -73,7 +73,7 @@ Example of a `db_simulate` result (Model Geometry Example, London Gatwick weathe
 
 ## HTTP access and the Dify workflow
 
-[http_server.py](../tools/designbuilder_mcp/http_server.py) serves the same tools over streamable HTTP (`/mcp`), plus three REST endpoints for a [Dify](https://dify.ai) form workflow ([dify/](../dify/README.md)):
+[http_server.py](../http_server.py) serves the same tools over streamable HTTP (`/mcp`), plus three REST endpoints for a [Dify](https://dify.ai) form workflow ([dify/](../dify/README.md)):
 
 - `POST /api/workflow` checks the form before anything starts (unknown use, ambiguous location, missing size) and queues `db_workflow`.
 - `GET /api/jobs/{id}?wait=45` waits up to 45 seconds for the job before answering, so Dify polls about once a minute.
@@ -86,7 +86,7 @@ Dify Cloud reaches the computer through a tunnel, which puts the endpoint on the
 DesignBuilder 2025.1 ships EnergyPlus 23.1 as `energyplusapi.dll` (in `%LOCALAPPDATA%\DesignBuilder\EnergyPlus`, also in `C:\ProgramData\DesignBuilder\JobServer\versions\DLL23.1.0.002-64.zip`), without `energyplus.exe` or ReadVarsESO. To avoid installing a second copy of EnergyPlus, the setup step:
 
 1. copies the DLL, `Energy+.idd` and `ExpandObjects.exe` from the DesignBuilder installation into `tools/dbengine/engine/`;
-2. compiles a small `energyplus.exe` ([energyplus_shim.cs](../tools/dbengine/energyplus_shim.cs)) with the C# compiler included in Windows. It calls `stateNew()` and `energyplus(state, argc, argv)` from the DLL with the usual command-line arguments, and writes the CSV files that ReadVarsESO would produce;
+2. compiles a small `energyplus.exe` ([energyplus_shim.cs](https://github.com/Tanna-qne/building-energy-toolchain/blob/main/tools/dbengine/energyplus_shim.cs)) with the C# compiler included in Windows. It calls `stateNew()` and `energyplus(state, argc, argv)` from the DLL with the usual command-line arguments, and writes the CSV files that ReadVarsESO would produce;
 3. copies the EPW files from `C:\ProgramData\DesignBuilder\Weather Data`.
 
 Results match the official EnergyPlus build. For an IDF exported by DesignBuilder, annual electricity is 39,792 kWh with both the bundled 23.1 engine and EnergyPlus 26.2, and the eight retrofit measures give identical percentage savings. Parametric models for this engine are generated with OpenStudio 3.6.1, which targets EnergyPlus 23.1.

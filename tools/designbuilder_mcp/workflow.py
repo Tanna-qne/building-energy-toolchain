@@ -12,8 +12,8 @@ from pathlib import Path
 
 import dblibrary
 import server
-from building_report import MEASURES, num, verdict
 from eplus_summary import summarize
+from server import MEASURES, num, verdict  # 有 building-energy-toolchain 時才有(節能措施用)
 
 SHAPE_FIELDS = {"rect": (), "L": ("notch_width", "notch_depth"), "U": ("notch_width", "notch_depth"),
                 "T": ("stem_width", "bar_depth"), "courtyard": ("court_width", "court_depth")}
@@ -132,6 +132,8 @@ def form_to_params(form):
         raise ValueError("mode 要是「新建模型」或「分析既有模型」")
     p = {"mode": mode, "measures": str(form.get("run_measures", "是")).strip() in ("是", "yes", "true", "1", "True"),
          "building_type": str(form.get("building_type", "") or "非住宅").strip()}
+    if p["measures"] and not server.HAS_TOOLCHAIN:
+        raise ValueError(server.TOOLCHAIN_NOTE + ";或把「跑節能措施」選否")
     if p["building_type"] not in dblibrary.BUILDING_TYPES:
         raise ValueError(f"建築類型只能是 {'、'.join(dblibrary.BUILDING_TYPES)}")
     # 外殼: 有實際數據就填, 沒填的部位用 ASHRAE 基準

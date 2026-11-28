@@ -52,7 +52,7 @@
 | [tools/modeler/build_idf.py](tools/modeler/build_idf.py) | 參數 → dragonfly 量體 → honeybee 負載/構造/HVAC → IDF |
 | [scan2/](scan2/) | 措施與組合模擬、回收期；多個 MCP server 平行執行 |
 | [sensitivity.py](sensitivity.py) | 電價與造價敏感度網頁 |
-| [tools/designbuilder_mcp/](tools/designbuilder_mcp/) | DesignBuilder 的 MCP server(8 個工具：讀模型、改屬性、模擬、措施報告、由參數建模) |
+| [tools/designbuilder_mcp/](https://github.com/Tanna-qne/designbuilder-mcp) | DesignBuilder 的 MCP server 與 Dify 表單應用,獨立倉庫 [designbuilder-mcp](https://github.com/Tanna-qne/designbuilder-mcp)(git submodule):22 個工具,建模、用途、作息、構造、空調、地點、模擬、逐時結果、節能措施 |
 | [tests/smoke.py](tests/smoke.py) | 端到端煙霧測試(建模、升級、措施、批量模擬) |
 
 敏感度分析的公開成果另見 [building-energy-sensitivity](https://github.com/Tanna-qne/building-energy-sensitivity)。
@@ -156,11 +156,11 @@
 2. 之後照常在 **Simulation → Update data** 跑模擬。跑完約 3–10 分鐘,瀏覽器會自動打開節能措施報告
    (用和 DB 同一個氣象檔)。結果在 `db_models/from_db/<模型名>/`,出錯看同資料夾的 `run.log`。
 
-**讓 agent 直接操作 DB**(英文說明:[docs/designbuilder-integration.md](docs/designbuilder-integration.md)):`tools/designbuilder_mcp/` 是一個 MCP server(DSH 裡叫 `designbuilder`),
+**讓 agent 直接操作 DB**(獨立倉庫 [designbuilder-mcp](https://github.com/Tanna-qne/designbuilder-mcp),英文說明 [designbuilder-integration.md](https://github.com/Tanna-qne/designbuilder-mcp/blob/main/docs/designbuilder-integration.md)):`tools/designbuilder_mcp/` 是一個 MCP server(DSH 裡叫 `designbuilder`),
 可以讀模型、改屬性、用 DB 跑模擬、算節能措施、由參數建 DB 模型。工具清單與注意事項見 `handover/HARNESS.md` §7。
 工具回傳的是白話摘要:`db_status` 會顯示授權剩幾天;`db_simulate` 給全年用能、單位面積能耗、分項、用電峰值與溫度沒達標的時數
 (同時寫一份 `summary.md` 在輸出資料夾);`db_report_status` 依「值不值得做」排好每個措施。
-安裝:`uv venv tools/designbuilder_mcp/.venv --python 3.12`,再
+第一次 clone 後先 `git submodule update --init` 取得這個資料夾。安裝:`uv venv tools/designbuilder_mcp/.venv --python 3.12`,再
 `uv pip install --python tools/designbuilder_mcp/.venv/Scripts/python.exe -r tools/designbuilder_mcp/requirements.txt`。
 
 **手動匯出**:

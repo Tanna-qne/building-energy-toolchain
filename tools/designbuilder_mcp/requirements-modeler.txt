@@ -1,0 +1,3 @@
+# 參數建模(massing.py, db_build_model)用的 Python 環境; 版本同 building-energy-toolchain 的 tools/modeler
+dragonfly-energy==1.46.53
+honeybee-designbuilder==0.4.8

@@ -114,6 +114,12 @@ def energyplus_mcp():
 
 def designbuilder_mcp():
     step("4/5 DesignBuilder MCP")
+    if not (DBMCP / "server.py").exists():
+        # 獨立倉庫 designbuilder-mcp, 以 git submodule 放在這裡; 下載 zip 的沒有 .git, 直接 clone
+        if (WS / ".git").exists():
+            run(["git", "-C", WS, "submodule", "update", "--init", "tools/designbuilder_mcp"])
+        else:
+            run(["git", "clone", "https://github.com/Tanna-qne/designbuilder-mcp.git", DBMCP])
     env = DBMCP / ".venv"
     if venv_python(env).exists():
         print("   已存在, 略過")

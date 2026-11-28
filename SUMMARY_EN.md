@@ -78,7 +78,7 @@ Full documentation: [projects/changxing/MODEL_README.md](projects/changxing/MODE
 
 - **Parametric modelling**: building parameters (footprint, storeys, window-to-wall ratio, use, HVAC type) → dragonfly / honeybee-energy / OpenStudio → EnergyPlus IDF.
 - **Retrofit scan**: the same 8 measures and their combination, with savings, simple payback, and tariff and cost sensitivity. Simulations run in parallel through a pool of EnergyPlus MCP servers.
-- **DesignBuilder integration**: imports IDFs exported from DesignBuilder. An MCP server reads and edits DesignBuilder models, runs simulations and builds models from parameters. A one-click installer and a desktop app run everything on the EnergyPlus engine bundled with DesignBuilder. Details: [docs/designbuilder-integration.md](docs/designbuilder-integration.md).
+- **DesignBuilder integration**: imports IDFs exported from DesignBuilder. An MCP server reads and edits DesignBuilder models, runs simulations and builds models from parameters. A one-click installer and a desktop app run everything on the EnergyPlus engine bundled with DesignBuilder. The MCP server lives in its own repository, [designbuilder-mcp](https://github.com/Tanna-qne/designbuilder-mcp) (a git submodule at `tools/designbuilder_mcp`); details: [designbuilder-integration.md](https://github.com/Tanna-qne/designbuilder-mcp/blob/main/docs/designbuilder-integration.md).
 
 ## Reproducibility
 

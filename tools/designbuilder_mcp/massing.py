@@ -16,8 +16,11 @@ import sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-# Ladybug Tools 會在 HOME / APPDATA 底下建資料夾, 指到 modeler 資料夾裡(同 build_idf.py)
-os.environ["HOME"] = os.environ["APPDATA"] = str(HERE.parent / "modeler" / "home")
+# Ladybug Tools 會在 HOME / APPDATA 底下建資料夾: 在主倉庫裡指到 tools/modeler/home(同 build_idf.py),
+# 單獨使用時放在這裡的 .modeler_home(或環境變數 DBMCP_MODELER_HOME)
+_home = os.environ.get("DBMCP_MODELER_HOME") or (
+    HERE.parent / "modeler" / "home" if (HERE.parent / "modeler").exists() else HERE / ".modeler_home")
+os.environ["HOME"] = os.environ["APPDATA"] = str(_home)
 
 from ladybug_geometry.geometry3d import Face3D, Point3D, Vector3D  # noqa: E402
 from dragonfly.building import Building  # noqa: E402
