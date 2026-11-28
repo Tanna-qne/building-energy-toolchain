@@ -1,0 +1,3 @@
+[submodule "tools/designbuilder_mcp"]
+	path = tools/designbuilder_mcp
+	url = https://github.com/Tanna-qne/designbuilder-mcp.git

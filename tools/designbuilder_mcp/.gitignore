@@ -1,8 +1,0 @@
-# 環境
-.venv/
-.modeler/
-.modeler_home/
-__pycache__/
-
-# 單獨使用時的工作資料夾: 模型副本、模擬結果、HTTP token
-work/
